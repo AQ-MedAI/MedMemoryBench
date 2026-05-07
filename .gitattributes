@@ -1,0 +1,2 @@
+methods/**/*.py !text !filter !merge !diff
+methods/* !text !filter !merge !diff
