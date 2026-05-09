@@ -17,4 +17,4 @@ agent_params:
 
 embedding:
   provider: "local"
-  model: "/Users/cyan/WYH/models/bge-small-zh-v1.5"
+  model: "models/bge-small-zh-v1.5"

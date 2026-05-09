@@ -1,7 +1,10 @@
 """Configuration for the check module."""
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional, List
+
+_GENERATION_DIR = str(Path(__file__).parent.parent.parent.resolve())
 
 
 @dataclass
@@ -29,8 +32,8 @@ class EnhancerConfig:
 class CheckRunnerConfig:
     """Check runner configuration."""
 
-    dataset_dir: str = "/Users/cyan/WYH/MedMemoryBench/generation/dataset"
-    output_dir: str = "/Users/cyan/WYH/MedMemoryBench/generation/augmentation"
+    dataset_dir: str = field(default_factory=lambda: str(Path(_GENERATION_DIR) / "dataset"))
+    output_dir: str = field(default_factory=lambda: str(Path(_GENERATION_DIR) / "augmentation"))
     persona_ids: List[int] = field(default_factory=list)
     checker: CheckerConfig = field(default_factory=CheckerConfig)
     enhancer: EnhancerConfig = field(default_factory=EnhancerConfig)

@@ -1,48 +1,87 @@
+# =============================================================================
+# MedMemoryBench - Dependencies
+# Python >= 3.10
+# =============================================================================
+
+# --------------- Core: Evaluation Framework (main.py, src/, benchmarks/, metrics/, utils/) ---------------
 pydantic>=2.0.0
-pydantic-settings>=2.0.0
+pyyaml>=6.0.0
 python-dotenv>=1.0.0
+tiktoken>=0.5.0
+transformers>=4.30.0              # Tokenizer fallback in utils/tokenizer.py
+
+# --------------- Core: LLM Client ---------------
+openai>=1.0.0,<2.0.0            # v2 has breaking API changes
+anthropic>=0.20.0
+httpx>=0.24.0
+
+# --------------- Data Generation (generation/) ---------------
+fastapi>=0.109.0
+uvicorn>=0.27.0
+litellm>=1.0.0
 sqlalchemy[asyncio]>=2.0.0
 aiosqlite>=0.19.0
-aiofiles>=23.0.0
 greenlet>=3.0.0
-httpx>=0.24.0
-anyio>=4.0.0
-openai>=1.0.0
-anthropic>=0.20.0
-litellm>=1.0.0
-tiktoken>=0.5.0
-orjson>=3.9.0
-pyyaml>=6.0.0
-tqdm>=4.65.0
-faiss-cpu==1.10.0
+pydantic-settings>=2.0.0
+
+# --------------- RAG Baselines (methods/embedding_rag.py, bm25_rag.py, self_rag.py, graph_rag.py) --------
+numpy>=1.24.0
+faiss-cpu>=1.7.0
 sentence-transformers>=2.2.0
 rank-bm25>=0.2.2
 langchain>=0.2.0
-langchain-classic>=1.0.0
 langchain-community>=0.2.0
-langchain-core>=1.2.0
+langchain-core>=0.2.0
 langchain-text-splitters>=0.2.0
 langchain-openai>=0.1.0
-langchain-huggingface>=1.0.0
-langchain-google-genai>=1.0.0
+langchain-huggingface>=0.1.0
 networkx>=3.0.0
 spacy>=3.7.0
 nltk>=3.8.0
-matplotlib>=3.7.0
+scikit-learn>=1.2.0
+tqdm>=4.65.0
 torch>=2.0.0
-mem0ai>=1.0.0      # For mem0 method
-zep-cloud>=3.0.0   # For zep method (requires ZEP_API_KEY)
+langchain-classic>=1.0.0
+
+# --------------- Method: mem0 (methods/mem0_agent.py) ---------------
+# mem0 is vendored in methods/mem0/, but may need qdrant-client at runtime
+qdrant-client>=1.7.0
+mem0ai>=1.0.0
+
+# --------------- Method: zep (methods/zep_agent.py, requires ZEP_API_KEY) ---------------
+zep-cloud>=3.0.0
+
+# --------------- Method: letta/MIRIX (vendored, methods/letta/, methods/MIRIX/) ---------------
 demjson3>=3.0.6
 pathvalidate>=3.3.1
-composio>=0.11.4
-mcp>=1.27.0
+composio>=0.11.0
+mcp>=1.0.0
 humps>=0.2.2
-opentelemetry-api>=1.40.0
-opentelemetry-sdk>=1.40.0
-opentelemetry-exporter-otlp>=1.40.0
-opentelemetry-instrumentation-requests>=0.61b0
+anyio>=4.0.0
+aiofiles>=23.0.0
+marshmallow>=3.20.0
 marshmallow-sqlalchemy>=1.5.0
-datamodel-code-generator>=0.55.0
-llama-index-core>=0.14.4
+datamodel-code-generator>=0.25.0
+llama-index-core>=0.10.0
+opentelemetry-api>=1.20.0
+opentelemetry-sdk>=1.20.0
+opentelemetry-exporter-otlp>=1.20.0
+opentelemetry-instrumentation-requests>=0.41b0
+
+# --------------- Method: HippoRAG (methods/hipporag_agent.py) ---------------
+scipy>=1.10.0
+tenacity>=8.0.0
+
+# --------------- Method: LightMem (methods/lightmem_agent.py) ---------------
+# Core deps already covered above (sentence-transformers, torch, transformers, etc.)
+
+# --------------- Optional: langchain extras ---------------
+langchain-google-genai>=1.0.0     # For Google Gemini models
+
+# --------------- Testing ---------------
 pytest>=7.0.0
 pytest-asyncio>=0.21.0
+
+# --------------- Utility ---------------
+orjson>=3.9.0
+matplotlib>=3.7.0

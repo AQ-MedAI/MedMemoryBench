@@ -41,7 +41,15 @@ QUERY_MAX_TOKENS=100000
 mkdir -p logs
 LOG_FILE="logs/pipeline_$(date +%Y%m%d_%H%M%S).log"
 
-source .venv/bin/activate
+# Activate the project-level virtual environment
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+if [ -f "${PROJECT_ROOT}/.venv/bin/activate" ]; then
+    source "${PROJECT_ROOT}/.venv/bin/activate"
+elif [ -f "${SCRIPT_DIR}/.venv/bin/activate" ]; then
+    source "${SCRIPT_DIR}/.venv/bin/activate"
+else
+    echo "Warning: No .venv found. Using current Python environment."
+fi
 
 if [ -n "${TARGET_PERSONA_ID}" ]; then
     PERSONA_ID_ARG="--persona-ids ${TARGET_PERSONA_ID}"
@@ -59,7 +67,7 @@ echo ""
 {
     echo "========== Stage 1/6: Import base personas =========="
     python -m pipeline.cli import-personas \
-      --input /Users/cyan/WYH/med_eve_project/backend/data/user_personas.json
+      --input data/base_personas.json
 
     echo ""
     echo "========== Stage 2/6: Generate user personas =========="

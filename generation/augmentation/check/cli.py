@@ -27,11 +27,12 @@ Examples:
         """,
     )
 
+    _gen_dir = str(Path(__file__).parent.parent.parent.resolve())
     parser.add_argument("--dataset-dir", type=str,
-        default="/Users/cyan/WYH/MedMemoryBench/generation/dataset",
+        default=str(Path(_gen_dir) / "dataset"),
         help="Dataset directory path")
     parser.add_argument("--output-dir", type=str,
-        default="/Users/cyan/WYH/MedMemoryBench/generation/augmentation",
+        default=str(Path(_gen_dir) / "augmentation"),
         help="Output directory path")
     parser.add_argument("--persona", type=int, action="append", dest="persona_ids",
         help="Persona ID(s) to check (repeatable)")

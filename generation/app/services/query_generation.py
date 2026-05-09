@@ -75,7 +75,7 @@ class QueryGenerationService:
 
             query_data = result.get("query", {})
             if not query_data:
-                logger.warning(f"[QueryGen] EEM: LLM 未Return有效 query")
+                logger.warning(f"[QueryGen] EEM: LLM did not return a valid query")
                 return None
 
             source_kp = SourceKeyPoint(
@@ -144,7 +144,7 @@ class QueryGenerationService:
 
             query_data = result.get("query", {})
             if not query_data:
-                logger.warning(f"[QueryGen] TLA: LLM 未Return有效 query")
+                logger.warning(f"[QueryGen] TLA: LLM did not return a valid query")
                 return None
 
             source_kp = SourceKeyPoint(
@@ -218,7 +218,7 @@ class QueryGenerationService:
 
             query_data = result.get("query", {})
             if not query_data:
-                logger.warning(f"[QueryGen] SUA: LLM 未Return有效 query")
+                logger.warning(f"[QueryGen] SUA: LLM did not return a valid query")
                 return None
 
             source_kps = []
@@ -266,12 +266,12 @@ class QueryGenerationService:
     def _format_single_kp(self, kp: dict) -> str:
         """Format a single key point for prompt injection."""
         return (
-            f"类别: {kp.get('category', '未知')}\n"
-            f"名称: {kp.get('name', '未知')}\n"
-            f"内容: {kp.get('content', '')}\n"
-            f"Time: {kp.get('time', '未知Time')}\n"
-            f"难度评分: {kp.get('trap_score', 0.5):.2f}\n"
-            f"来源Session: {kp.get('session_id', 0)}"
+            f"Category: {kp.get('category', 'Unknown')}\n"
+            f"Name: {kp.get('name', 'Unknown')}\n"
+            f"Content: {kp.get('content', '')}\n"
+            f"Time: {kp.get('time', 'Unknown time')}\n"
+            f"Difficulty score: {kp.get('trap_score', 0.5):.2f}\n"
+            f"Source session: {kp.get('session_id', 0)}"
         )
 
     def _format_category_kps(self, kps: list[dict]) -> str:
@@ -279,9 +279,9 @@ class QueryGenerationService:
         lines = []
         for i, kp in enumerate(kps, 1):
             lines.append(
-                f"[{i}] {kp.get('name', '未知')} | "
-                f"Time: {kp.get('time', '未知')} | "
-                f"内容: {kp.get('content', '')}"
+                f"[{i}] {kp.get('name', 'Unknown')} | "
+                f"Time: {kp.get('time', 'Unknown')} | "
+                f"Content: {kp.get('content', '')}"
             )
         return "\n".join(lines)
 
@@ -330,7 +330,7 @@ class QueryGenerationService:
 
         if not trap_reasoning:
             logger.warning(
-                f"[QueryGen] {query_type.upper()}: TrapReasoning阶段Failed"
+                f"[QueryGen] {query_type.upper()}: Trap reasoning phase failed"
             )
             return None
 
@@ -362,15 +362,15 @@ class QueryGenerationService:
 
         # Format source event content
         if source_event_content:
-            formatted_event = f"**Event内容**：{source_event_content}"
+            formatted_event = f"**Event content**: {source_event_content}"
         else:
-            formatted_event = "（无来源EventInfo）"
+            formatted_event = "(No source event info)"
 
         prompt = TRAP_REASONING_PROMPT.format(
-            target_category=target_kp.get("category", "未知"),
-            target_name=target_kp.get("name", "未知"),
+            target_category=target_kp.get("category", "Unknown"),
+            target_name=target_kp.get("name", "Unknown"),
             target_content=target_kp.get("content", ""),
-            target_time=target_kp.get("time", "未知Time"),
+            target_time=target_kp.get("time", "Unknown time"),
             target_session_id=target_kp.get("session_id", 0),
             source_event_content=formatted_event,
             background_kps=background_kps,
@@ -386,7 +386,7 @@ class QueryGenerationService:
 
             if not result.get("trap_points"):
                 logger.warning(
-                    f"[QueryGen] Phase1: 未Generate有效的Trap要点"
+                    f"[QueryGen] Phase1: Failed to generate valid trap points"
                 )
                 return None
 
@@ -428,7 +428,7 @@ class QueryGenerationService:
 
         prompt_template = prompt_map.get(query_type)
         if not prompt_template:
-            logger.error(f"[QueryGen] 未知的 query_type: {query_type}")
+            logger.error(f"[QueryGen] Unknown query_type: {query_type}")
             return None
 
         trap_reasoning_text = json.dumps(trap_reasoning, ensure_ascii=False, indent=2)
@@ -438,10 +438,10 @@ class QueryGenerationService:
         existing_queries_hint = self._format_existing_queries_hint(existing_queries)
 
         prompt = prompt_template.format(
-            target_category=target_kp.get("category", "未知"),
-            target_name=target_kp.get("name", "未知"),
+            target_category=target_kp.get("category", "Unknown"),
+            target_name=target_kp.get("name", "Unknown"),
             target_content=target_kp.get("content", ""),
-            source_event_content=source_event_content if source_event_content else "（无来源EventInfo）",
+            source_event_content=source_event_content if source_event_content else "(No source event info)",
             trap_reasoning=trap_reasoning_text,
             background_summary=background_summary,
             existing_queries_hint=existing_queries_hint,
@@ -458,7 +458,7 @@ class QueryGenerationService:
             query_data = result.get("query", {})
             if not query_data:
                 logger.warning(
-                    f"[QueryGen] Phase2: LLM 未Return有效 query"
+                    f"[QueryGen] Phase2: LLM did not return a valid query"
                 )
                 return None
 
@@ -544,11 +544,11 @@ class QueryGenerationService:
     def _format_background_kps(self, all_key_points: list[dict], target_kp: dict) -> str:
         """Format background key points for trap reasoning, grouped by category."""
         if not all_key_points:
-            return "（暂无背景Info）"
+            return "(No background info available)"
 
         grouped: dict[str, list[dict]] = {}
         for kp in all_key_points:
-            category = kp.get("category", "未知")
+            category = kp.get("category", "Unknown")
             if category not in grouped:
                 grouped[category] = []
             grouped[category].append(kp)
@@ -561,11 +561,11 @@ class QueryGenerationService:
                     kp.get("name") == target_kp.get("name") and
                     kp.get("content") == target_kp.get("content")
                 )
-                marker = " ★【目标Knowledge points】" if is_target else ""
+                marker = " ★ [Target knowledge point]" if is_target else ""
 
                 lines.append(
-                    f"- [{kp.get('name', '未知')}] {kp.get('content', '')}"
-                    f" (Time: {kp.get('time', '未知')}, session: {kp.get('session_id', 0)})"
+                    f"- [{kp.get('name', 'Unknown')}] {kp.get('content', '')}"
+                    f" (Time: {kp.get('time', 'Unknown')}, session: {kp.get('session_id', 0)})"
                     f"{marker}"
                 )
             lines.append("")
@@ -575,31 +575,31 @@ class QueryGenerationService:
     def _format_background_summary(self, all_key_points: list[dict]) -> str:
         """Format a concise background info summary for question generation."""
         if not all_key_points:
-            return "（暂无背景Info）"
+            return "(No background info available)"
 
         category_counts: dict[str, int] = {}
         key_info: list[str] = []
 
         for kp in all_key_points:
-            category = kp.get("category", "未知")
+            category = kp.get("category", "Unknown")
             category_counts[category] = category_counts.get(category, 0) + 1
 
             content = kp.get("content", "")
             name = kp.get("name", "")
 
             # Extract critical info (allergies, contraindications, preferences)
-            important_keywords = ["过敏", "禁忌", "不喜欢", "不能", "禁用", "偏好", "喜欢"]
+            important_keywords = ["allergy", "contraindication", "dislike", "cannot", "prohibited", "preference", "like"]
             for keyword in important_keywords:
                 if keyword in content or keyword in name:
                     key_info.append(f"- {name}: {content}")
                     break
 
-        lines = ["**患者Info概览：**"]
-        lines.append(f"共有 {len(all_key_points)} 条Knowledge points记录")
-        lines.append(f"覆盖类别: {', '.join(category_counts.keys())}")
+        lines = ["**Patient info overview:**"]
+        lines.append(f"Total {len(all_key_points)} knowledge point records")
+        lines.append(f"Covering categories: {', '.join(category_counts.keys())}")
 
         if key_info:
-            lines.append("\n**重要Info提示（请特别注意）：**")
+            lines.append("\n**Important info notes (pay special attention):**")
             for info in list(set(key_info))[:10]:  # Max 10 items
                 lines.append(info)
 
@@ -613,9 +613,9 @@ class QueryGenerationService:
 
         lines = [
             "",
-            "## ⚠️ Generated的同类题目（请避免重复！）",
+            "## ⚠️ Previously generated questions of the same type (avoid repetition!)",
             "",
-            "以下是该题型Generated的题目，**请务必避免与这些题目的考点、Question内容或Answer选项重复**，寻找新的考察角度：",
+            "Below are previously generated questions of this type. **Please avoid repeating the same test points, question content, or answer options**, and find new angles:",
             "",
         ]
 
@@ -623,7 +623,7 @@ class QueryGenerationService:
             question = q.get("question", "")
             answers = q.get("answers", [])
 
-            lines.append(f"### 已有题目 {i}")
+            lines.append(f"### Existing question {i}")
             lines.append(f"**Question**：{question}")
 
             if answers:
@@ -637,10 +637,10 @@ class QueryGenerationService:
             lines.append("")
 
         lines.extend([
-            "**要求**：",
-            "1. 不要问与上述题目相似的Question",
-            "2. 不要使用相同的考察角度或TrapType",
-            "3. 寻找新的医学要点来设计题目",
+            "**Requirements**:",
+            "1. Do not ask questions similar to the above",
+            "2. Do not use the same test angle or trap type",
+            "3. Find new medical points to design questions",
         ])
 
         return "\n".join(lines)
@@ -709,7 +709,7 @@ class QueryGenerationService:
         )
 
         if not candidate_chains:
-            logger.warning(f"[QueryGen] MCD Phase1: 未挖掘到有效的Causal chain")
+            logger.warning(f"[QueryGen] MCD Phase1: Failed to extract valid causal chain")
             return None
 
         # Phase 2: Chain validation with retry
@@ -731,16 +731,16 @@ class QueryGenerationService:
                 break
 
             # Validation failed, attempt improvement
-            rejection_reason = validation_result.get("rejection_reason", "未知原因")
+            rejection_reason = validation_result.get("rejection_reason", "Unknown reason")
             improvement_suggestions = validation_result.get("improvement_suggestions", [])
 
             logger.warning(
-                f"[QueryGen] MCD Phase2: 验证不通过 (第 {retry_count + 1} 次) - {rejection_reason}"
+                f"[QueryGen] MCD Phase2: Validation failed (attempt {retry_count + 1}) - {rejection_reason}"
             )
 
             if retry_count >= max_retry:
                 logger.warning(
-                    f"[QueryGen] MCD: 达到最大Retry次数 ({max_retry})，放弃Generate"
+                    f"[QueryGen] MCD: Reached max retries ({max_retry}), giving up generation"
                 )
                 break
 
@@ -759,7 +759,7 @@ class QueryGenerationService:
 
             if not improved_chain:
                 logger.warning(
-                    f"[QueryGen] MCD Phase1.5: 无法改进Reasoning链，尝试下一个候选"
+                    f"[QueryGen] MCD Phase1.5: Failed to improve reasoning chain, trying next candidate"
                 )
                 # Try next candidate chain if available
                 chain_idx = retry_count + 1
@@ -773,7 +773,7 @@ class QueryGenerationService:
             retry_count += 1
 
         if not validated_chain:
-            logger.warning(f"[QueryGen] MCD: 所有Retry均Failed，无法Generate有效的Reasoning链")
+            logger.warning(f"[QueryGen] MCD: All retries failed, unable to generate valid reasoning chain")
             return None
 
         # Phase 2.5: Content enrichment
@@ -836,7 +836,7 @@ class QueryGenerationService:
 
             candidate_chains = result.get("candidate_chains", [])
             if not candidate_chains:
-                logger.warning(f"[QueryGen] MCD Phase1: LLM 未Return候选链")
+                logger.warning(f"[QueryGen] MCD Phase1: LLM did not return candidate chains")
                 return None
 
             # Filter out chains containing future information
@@ -848,7 +848,7 @@ class QueryGenerationService:
                     # session_id=0 means medical knowledge node, allowed
                     if node_session_id > session_id and node_session_id != 0:
                         logger.warning(
-                            f"[QueryGen] MCD Phase1: 候选链包含未来Info "
+                            f"[QueryGen] MCD Phase1: Candidate chain contains future info "
                             f"(node session_id={node_session_id} > current={session_id})"
                         )
                         is_valid = False
@@ -857,7 +857,7 @@ class QueryGenerationService:
                     valid_chains.append(chain)
 
             if not valid_chains:
-                logger.warning(f"[QueryGen] MCD Phase1: 所有候选链都包含未来Info")
+                logger.warning(f"[QueryGen] MCD Phase1: All candidate chains contain future info")
                 return None
 
             # Sort by quality_score
@@ -924,7 +924,7 @@ class QueryGenerationService:
             is_valid = validation_result.get("is_valid", False)
 
             if not is_valid:
-                rejection_reason = result.get("rejection_reason", "未知原因")
+                rejection_reason = result.get("rejection_reason", "Unknown reason")
                 improvement_suggestions = result.get("improvement_suggestions", [])
                 logger.info(
                     f"[QueryGen Response] caller={caller}_phase2 "
@@ -939,10 +939,10 @@ class QueryGenerationService:
 
             refined_chain = result.get("refined_chain", {})
             if not refined_chain.get("nodes"):
-                logger.warning(f"[QueryGen] MCD Phase2: 未Return精化后的链")
+                logger.warning(f"[QueryGen] MCD Phase2: Did not return refined chain")
                 return {
                     "is_valid": False,
-                    "rejection_reason": "验证通过但未Return精化后的链",
+                    "rejection_reason": "Validation passed but refined chain not returned",
                     "improvement_suggestions": [],
                 }
 
@@ -964,7 +964,7 @@ class QueryGenerationService:
             )
             return {
                 "is_valid": False,
-                "rejection_reason": f"验证过程出错: {str(e)}",
+                "rejection_reason": f"Validation error: {str(e)}",
                 "improvement_suggestions": [],
             }
 
@@ -988,7 +988,7 @@ class QueryGenerationService:
 
         suggestions_text = "\n".join(
             f"- {s}" for s in improvement_suggestions
-        ) if improvement_suggestions else "（无具体建议）"
+        ) if improvement_suggestions else "(No specific suggestions)"
 
         events_timeline = self._format_events_timeline(events_data, session_id)
 
@@ -1016,7 +1016,7 @@ class QueryGenerationService:
 
             improved_chain = result.get("improved_chain", {})
             if not improved_chain.get("nodes"):
-                logger.warning(f"[QueryGen] MCD Phase1.5: LLM 未Return有效的改进链")
+                logger.warning(f"[QueryGen] MCD Phase1.5: LLM did not return a valid improved chain")
                 return None
 
             # Verify improved chain has no future information
@@ -1024,7 +1024,7 @@ class QueryGenerationService:
                 node_session_id = node.get("session_id", 0)
                 if node_session_id > session_id and node_session_id != 0:
                     logger.warning(
-                        f"[QueryGen] MCD Phase1.5: 改进链仍包含未来Info "
+                        f"[QueryGen] MCD Phase1.5: Improved chain still contains future info "
                         f"(node session_id={node_session_id} > current={session_id})"
                     )
                     return None
@@ -1068,7 +1068,7 @@ class QueryGenerationService:
                 involved_sessions.add(sid)
 
         if not involved_sessions:
-            logger.warning(f"[QueryGen] MCD Phase2.5: not found涉及的 session")
+            logger.warning(f"[QueryGen] MCD Phase2.5: Referenced session not found")
             return validated_chain
 
         validated_chain_json = json.dumps(validated_chain, ensure_ascii=False, indent=2)
@@ -1103,7 +1103,7 @@ class QueryGenerationService:
 
             enriched_chain = result.get("enriched_chain", {})
             if not enriched_chain.get("nodes"):
-                logger.warning(f"[QueryGen] MCD Phase2.5: LLM 未Return有效的精化链，使用原链")
+                logger.warning(f"[QueryGen] MCD Phase2.5: LLM did not return a valid refined chain, using original chain")
                 return validated_chain
 
             enrichment_summary = enriched_chain.get("enrichment_summary", "")
@@ -1130,7 +1130,7 @@ class QueryGenerationService:
     ) -> str:
         """Format dialogue content for involved sessions."""
         if not dialogues_data:
-            return "（无DialogueData）"
+            return "(No dialogue data)"
 
         # Build session_id -> event_id mapping
         session_to_event = {}
@@ -1151,27 +1151,27 @@ class QueryGenerationService:
 
             if not dialogue:
                 lines.append(f"\n### Session {sid}")
-                lines.append("（not foundDialogueData）")
+                lines.append("(No dialogue data found)")
                 continue
 
             lines.append(f"\n### Session {sid}")
             event_id = session_to_event.get(sid)
             if event_id:
-                lines.append(f"关联EventID: {event_id}")
+                lines.append(f"Associated event ID: {event_id}")
 
             turns = dialogue.get("turns", [])
             if turns:
-                lines.append("Dialogue内容：")
+                lines.append("Dialogue content:")
                 for turn in turns[-6:]:  # Last 6 turns max
                     role = turn.get("role", "unknown")
                     content = turn.get("content", "")
-                    role_label = "患者" if role == "user" else "医生"
+                    role_label = "Patient" if role == "user" else "Doctor"
                     # Truncate long content
                     if len(content) > 300:
                         content = content[:300] + "..."
                     lines.append(f"- {role_label}: {content}")
             else:
-                lines.append("（无Dialogue轮次）")
+                lines.append("(No dialogue turns)")
 
         return "\n".join(lines)
 
@@ -1183,7 +1183,7 @@ class QueryGenerationService:
     ) -> str:
         """Format event details for involved sessions."""
         if not events_data:
-            return "（无EventData）"
+            return "(No event data)"
 
         # Build session_id -> event_id mapping
         session_to_event = {}
@@ -1207,14 +1207,14 @@ class QueryGenerationService:
                 continue
 
             lines.append(f"\n### Event {eid}")
-            lines.append(f"Date: {event.get('event_date', '未知')}")
-            lines.append(f"Type: {event.get('type', '未知')}")
-            lines.append(f"内容: {event.get('event', '')}")
+            lines.append(f"Date: {event.get('event_date', 'Unknown')}")
+            lines.append(f"Type: {event.get('type', 'Unknown')}")
+            lines.append(f"Content: {event.get('event', '')}")
             triggered_by = event.get("triggered_by", [])
             if triggered_by:
-                lines.append(f"触发关系: 由Event {triggered_by} 触发")
+                lines.append(f"Trigger: triggered by event {triggered_by}")
 
-        return "\n".join(lines) if lines else "（无相关Event）"
+        return "\n".join(lines) if lines else "(No related events)"
 
     def _format_kps_for_sessions(
         self,
@@ -1223,7 +1223,7 @@ class QueryGenerationService:
     ) -> str:
         """Format key points for involved sessions."""
         if not all_key_points:
-            return "（无Knowledge pointsData）"
+            return "(No knowledge points data)"
 
         grouped: dict[int, list[dict]] = {}
         for kp in all_key_points:
@@ -1238,13 +1238,13 @@ class QueryGenerationService:
             kps = grouped[sid]
             lines.append(f"\n### Session {sid} Knowledge points")
             for kp in kps:
-                category = kp.get("category", "未知")
-                name = kp.get("name", "未知")
+                category = kp.get("category", "Unknown")
+                name = kp.get("name", "Unknown")
                 content = kp.get("content", "")
                 trap_score = kp.get("trap_score", 0.5)
                 lines.append(f"- [{category}] {name}: {content} (trap_score={trap_score:.2f})")
 
-        return "\n".join(lines) if lines else "（无相关Knowledge points）"
+        return "\n".join(lines) if lines else "(No related knowledge points)"
 
     async def _mcd_phase3_synthesize_question(
         self,
@@ -1285,7 +1285,7 @@ class QueryGenerationService:
 
             query_data = result.get("query", {})
             if not query_data:
-                logger.warning(f"[QueryGen] MCD Phase3: LLM 未Return有效 query")
+                logger.warning(f"[QueryGen] MCD Phase3: LLM did not return a valid query")
                 return None
 
             diversity_check = result.get("diversity_check", {})
@@ -1375,14 +1375,14 @@ class QueryGenerationService:
     ) -> str:
         """Format existing questions for deduplication check."""
         if not existing_mcd_queries:
-            return "（暂无Generated的Question）"
+            return "(No generated questions yet)"
 
         lines = []
         for i, q in enumerate(existing_mcd_queries, 1):
             question = q.get("question", "")
             metadata = q.get("metadata", {})
-            pattern = metadata.get("question_pattern", "未知")
-            lines.append(f"{i}. [{pattern}模式] {question}")
+            pattern = metadata.get("question_pattern", "Unknown")
+            lines.append(f"{i}. [{pattern} pattern] {question}")
 
         return "\n".join(lines)
 
@@ -1392,10 +1392,10 @@ class QueryGenerationService:
     ) -> str:
         """Format existing questions for deduplication check (v2 with specificity info)."""
         if not existing_mcd_queries:
-            return "（暂无Generated的Question）"
+            return "(No generated questions yet)"
 
         lines = [
-            "以下是Generated的 MCD Question，请确保新Question的**特异性入口Type**与这些不同：",
+            "Below are generated MCD questions. Please ensure the new question's **specificity entry type** differs from these:",
             "",
         ]
 
@@ -1403,32 +1403,32 @@ class QueryGenerationService:
             question = q.get("question", "")
             metadata = q.get("metadata", {})
 
-            specificity_type = metadata.get("specificity_type", "未知")
-            question_pattern = metadata.get("question_pattern", "未知")
+            specificity_type = metadata.get("specificity_type", "Unknown")
+            question_pattern = metadata.get("question_pattern", "Unknown")
 
             question_design = metadata.get("question_design", {})
             professional_info = question_design.get("professional_info_used", [])
             hidden_reasoning = question_design.get("hidden_reasoning", "")
 
-            lines.append(f"### 已有Question {i}")
-            lines.append(f"**Question**：{question}")
-            lines.append(f"**特异性Type**：{specificity_type}")
-            lines.append(f"**Question模式**：{question_pattern}")
+            lines.append(f"### Existing question {i}")
+            lines.append(f"**Question**: {question}")
+            lines.append(f"**Specificity type**: {specificity_type}")
+            lines.append(f"**Question pattern**: {question_pattern}")
 
             if professional_info:
-                lines.append(f"**涉及Info**：{', '.join(professional_info[:5])}")
+                lines.append(f"**Related info**: {', '.join(professional_info[:5])}")
 
             if hidden_reasoning:
-                lines.append(f"**核心Reasoning**：{hidden_reasoning[:150]}...")
+                lines.append(f"**Core reasoning**: {hidden_reasoning[:150]}...")
 
             lines.append("")
 
         lines.extend([
             "---",
-            "**⚠️ 去重要求**：",
-            "1. 新Question的**特异性入口Type**必须与上述Question不同",
-            "2. 不能只换血糖数值，必须换**完全不同的角度**",
-            "3. 如果上面已经有药物相关Question，请考虑生活Event/检查Result/症状组合等其他Type",
+            "**⚠️ Deduplication requirements**:",
+            "1. The new question's **specificity entry type** must differ from the above questions",
+            "2. Do not just change numerical values; use a **completely different angle**",
+            "3. If medication-related questions already exist above, consider other types such as life events/lab results/symptom combinations",
         ])
 
         return "\n".join(lines)
@@ -1443,23 +1443,23 @@ class QueryGenerationService:
         Note: events_data should already be filtered to session_id <= current_session_id.
         """
         if not events_data:
-            return f"（截止 Session {current_session_id} 暂无EventData）"
+            return f"(No event data up to session {current_session_id})"
 
         # Sort by event date
         sorted_events = sorted(events_data, key=lambda x: x.get("event_date", ""))
 
-        lines = [f"⚠️ 注意：以下Event均为 Session {current_session_id} 及之前的Data，禁止使用任何超出此范围的Info。", ""]
+        lines = [f"⚠️ Note: The following events are from session {current_session_id} and earlier. Do not use any information beyond this scope.", ""]
         for event in sorted_events:
             event_id = event.get("event_id", 0)
-            event_date = event.get("event_date", "未知Date")
-            event_type = event.get("type", "未知Type")
+            event_date = event.get("event_date", "Unknown date")
+            event_type = event.get("type", "Unknown type")
             event_content = event.get("event", "")
             triggered_by = event.get("triggered_by", [])
 
             lines.append(f"[Event {event_id}] {event_date} ({event_type})")
-            lines.append(f"内容: {event_content}")
+            lines.append(f"Content: {event_content}")
             if triggered_by:
-                lines.append(f"触发关系: 由Event {triggered_by} 触发")
+                lines.append(f"Trigger: triggered by event {triggered_by}")
             lines.append("---")
 
         return "\n".join(lines)
@@ -1475,7 +1475,7 @@ class QueryGenerationService:
         Note: all_key_points should already be filtered to session_id <= current_session_id.
         """
         if not all_key_points:
-            return "（暂无Knowledge points）"
+            return "(No knowledge points)"
 
         # Build session_id -> date mapping
         session_dates = {}
@@ -1483,7 +1483,7 @@ class QueryGenerationService:
             for session in sessions_data:
                 sid = session.get("session_id")
                 event_info = session.get("event_info", {})
-                session_dates[sid] = event_info.get("date", "未知Date")
+                session_dates[sid] = event_info.get("date", "Unknown date")
 
         grouped: dict[int, list[dict]] = {}
         for kp in all_key_points:
@@ -1494,23 +1494,23 @@ class QueryGenerationService:
 
         lines = []
         if current_session_id:
-            lines.append(f"⚠️ 注意：以下Knowledge points均来自 Session {current_session_id} 及之前，禁止假设或使用任何超出此范围的Info。")
+            lines.append(f"⚠️ Note: The following knowledge points are from session {current_session_id} and earlier. Do not assume or use any information beyond this scope.")
             lines.append("")
 
         max_session_in_data = max(grouped.keys()) if grouped else 0
         for sid in sorted(grouped.keys()):
             kps = grouped[sid]
-            date = session_dates.get(sid, kps[0].get("time", "未知Date") if kps else "未知Date")
+            date = session_dates.get(sid, kps[0].get("time", "Unknown date") if kps else "Unknown date")
             lines.append(f"\n### Session {sid} ({date})")
 
             for kp in kps:
                 lines.append(
-                    f"- [{kp.get('category', '未知')}] {kp.get('name', '未知')}: "
+                    f"- [{kp.get('category', 'Unknown')}] {kp.get('name', 'Unknown')}: "
                     f"{kp.get('content', '')}"
                 )
 
         if current_session_id:
-            lines.append(f"\n⚠️ 最大可用 Session ID: {max_session_in_data}")
+            lines.append(f"\n⚠️ Max available session ID: {max_session_in_data}")
 
         return "\n".join(lines)
 
@@ -1520,12 +1520,12 @@ class QueryGenerationService:
     ) -> str:
         """Format existing MCD reasoning chains as a deduplication hint."""
         if not existing_mcd_queries:
-            return "（暂无Generated的Reasoning链）"
+            return "(No generated reasoning chains yet)"
 
         lines = [
-            "## ⚠️ Generated的Reasoning链（请避免重复！）",
+            "## ⚠️ Previously generated reasoning chains (avoid repetition!)",
             "",
-            "以下是Generated的 MCD Question及其Reasoning链，**请务必挖掘新的、不重复的ReasoningPath**：",
+            "Below are generated MCD questions and their reasoning chains. **Please find new, non-repetitive reasoning paths**:",
             "",
         ]
 
@@ -1533,18 +1533,18 @@ class QueryGenerationService:
             question = q.get("question", "")
             metadata = q.get("metadata", {})
             reasoning_chain = metadata.get("reasoning_chain", [])
-            pattern = metadata.get("reasoning_pattern", "未知")
+            pattern = metadata.get("reasoning_pattern", "Unknown")
 
-            lines.append(f"### 已有Question {i}")
+            lines.append(f"### Existing question {i}")
             lines.append(f"**Question**: {question}")
-            lines.append(f"**Reasoning模式**: {pattern}")
-            lines.append(f"**Reasoning链**:")
+            lines.append(f"**Reasoning pattern**: {pattern}")
+            lines.append(f"**Reasoning chain**:")
 
             for node in reasoning_chain:
                 node_id = node.get("node_id", 0)
                 content = node.get("content", "")
                 role = node.get("role", "")
-                lines.append(f"  - 节点{node_id} ({role}): {content}")
+                lines.append(f"  - Node {node_id} ({role}): {content}")
 
             lines.append("")
 
@@ -1556,11 +1556,11 @@ class QueryGenerationService:
     ) -> str:
         """Format all key points for the validation phase, grouped by category."""
         if not all_key_points:
-            return "（暂无Knowledge points）"
+            return "(No knowledge points)"
 
         grouped: dict[str, list[dict]] = {}
         for kp in all_key_points:
-            cat = kp.get("category", "未知")
+            cat = kp.get("category", "Unknown")
             if cat not in grouped:
                 grouped[cat] = []
             grouped[cat].append(kp)
@@ -1570,8 +1570,8 @@ class QueryGenerationService:
             lines.append(f"\n### {cat}")
             for kp in kps:
                 lines.append(
-                    f"- [{kp.get('name', '未知')}] {kp.get('content', '')} "
-                    f"(Session {kp.get('session_id', 0)}, {kp.get('time', '未知Time')})"
+                    f"- [{kp.get('name', 'Unknown')}] {kp.get('content', '')} "
+                    f"(Session {kp.get('session_id', 0)}, {kp.get('time', 'Unknown time')})"
                 )
 
         return "\n".join(lines)
@@ -1582,7 +1582,7 @@ class QueryGenerationService:
     ) -> str:
         """Format existing MCD queries hint for validation phase."""
         if not existing_mcd_queries:
-            return "（暂无Generated的Question）"
+            return "(No generated questions yet)"
 
         lines = []
         for i, q in enumerate(existing_mcd_queries, 1):

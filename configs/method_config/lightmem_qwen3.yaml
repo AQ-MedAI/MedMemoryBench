@@ -14,7 +14,7 @@ model:
 embedding:
   provider: "local"
   model: "BAAI/bge-small-zh-v1.5"
-  model_path: "/Users/cyan/WYH/models/bge-small-zh-v1.5"
+  model_path: "models/bge-small-zh-v1.5"
   dim: 512
 
 agent_params:

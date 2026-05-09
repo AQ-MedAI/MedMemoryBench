@@ -157,10 +157,14 @@ class MethodConfig:
         embedding_config = None
         if "embedding" in data:
             emb_data = data["embedding"]
+            raw_model_path = emb_data.get("model_path")
+            # Resolve relative model paths against PROJECT_ROOT
+            if raw_model_path and not os.path.isabs(raw_model_path):
+                raw_model_path = str(PROJECT_ROOT / raw_model_path)
             embedding_config = EmbeddingConfig(
                 provider=emb_data.get("provider", "openai"),
                 model=emb_data.get("model", "text-embedding-3-small"),
-                model_path=emb_data.get("model_path"),
+                model_path=raw_model_path,
                 dim=emb_data.get("dim"),
                 api_key=emb_data.get("api_key"),
                 base_url=emb_data.get("base_url"),
@@ -179,6 +183,19 @@ class MethodConfig:
                 base_url=mem_data.get("base_url"),
             )
 
+        # Resolve relative paths in agent_params against PROJECT_ROOT
+        raw_agent_params = data.get("agent_params", {})
+        _path_keys = {
+            "amem_embedding_model", "embedding_model_path", "model_path",
+            "working_dir",
+        }
+        resolved_agent_params = {}
+        for k, v in raw_agent_params.items():
+            if k in _path_keys and isinstance(v, str) and v and not os.path.isabs(v):
+                resolved_agent_params[k] = str(PROJECT_ROOT / v)
+            else:
+                resolved_agent_params[k] = v
+
         return cls(
             method_name=data.get("method_name", "unknown"),
             method_type=data.get("method_type", "baseline"),
@@ -186,7 +203,7 @@ class MethodConfig:
             model=model_config,
             embedding=embedding_config,
             memorize_model=memorize_model_config,
-            agent_params=data.get("agent_params", {}),
+            agent_params=resolved_agent_params,
             raw_config=data,
         )
 

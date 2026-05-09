@@ -110,7 +110,19 @@ conda activate medmemorybench
 pip install -r requirements.txt
 ```
 
-### 2. Configure Environment Variables
+**2. Method-Specific Setup**
+
+Some memory methods include their own packages and require additional installation. Refer to the respective method's README for setup instructions.
+
+**Embedding models:** Method configs reference local embedding models under `models/` (e.g., `models/bge-small-zh-v1.5`). Download them before running:
+
+```bash
+python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-zh-v1.5').save('models/bge-small-zh-v1.5')"
+```
+
+You can also set the `MODELS_DIR` environment variable to point to a custom models directory.
+
+### 3. Configure Environment Variables
 
 Copy and edit the `.env` file:
 
@@ -151,7 +163,7 @@ Notes:
 - `OPENAI_API_KEY` can still be kept for other methods, but Letta auth should be validated against the effective runtime key.
 - `LETTA_DIR` is recommended to avoid stale local SQLite metadata from previous Letta runs.
 
-### 3. Run Evaluation
+### 4. Run Evaluation
 
 **Using script:**
 ```bash

@@ -13,7 +13,7 @@ model:
 embedding:
   provider: "local"
   model: "bge-small-zh-v1.5"
-  model_path: "/Users/cyan/WYH/models/bge-small-zh-v1.5"
+  model_path: "models/bge-small-zh-v1.5"
 
 agent_params:
   retrieve_num: 5
@@ -26,7 +26,7 @@ agent_params:
   # Embedding configuration
   # embedding_provider controls the backend: "local" uses sentence_transformer, others use universal_api
   embedding_model: "bge-small-zh-v1.5"
-  embedding_model_path: "/Users/cyan/WYH/models/bge-small-zh-v1.5"
+  embedding_model_path: "models/bge-small-zh-v1.5"
   embedding_dim: 512
   embedding_provider: "local"
 

@@ -14,7 +14,7 @@ agent_params:
   retrieve_num: 5
   amem_backend: "openai"          # openai / ollama / sglang / vllm
   amem_model: "Qwen3-235B-A22B-Instruct-2507"        # model used by A-Mem metadata/evolution calls
-  amem_embedding_model: "/Users/cyan/WYH/models/bge-small-zh-v1.5"
+  amem_embedding_model: "models/bge-small-zh-v1.5"
   amem_evo_threshold: 100
   amem_max_tokens: 10000          # max tokens for A-Mem internal LLM calls
   amem_max_context_tokens: 40000 

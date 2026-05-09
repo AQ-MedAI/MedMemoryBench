@@ -39,5 +39,5 @@ agent_params:
 embedding:
   provider: "local"
   model: "bge-small-zh-v1.5"
-  model_path: "/Users/cyan/WYH/models/bge-small-zh-v1.5"
+  model_path: "models/bge-small-zh-v1.5"
   dim: 512

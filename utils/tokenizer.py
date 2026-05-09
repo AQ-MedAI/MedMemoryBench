@@ -60,8 +60,9 @@ class CharEstimationTokenizer:
         return ""
 
 
-# Default local models directory
-DEFAULT_MODELS_DIR = Path("/Users/cyan/WYH/models")
+# Default local models directory (configurable via MODELS_DIR env var)
+_PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+DEFAULT_MODELS_DIR = Path(os.environ.get("MODELS_DIR", str(_PROJECT_ROOT / "models")))
 
 # Tokenizer model mapping
 # key: model family, value: (local dir name, tiktoken encoding, HuggingFace model name)
@@ -137,24 +138,25 @@ def count_tokens(text: str, tokenizer: Optional[TokenizerProtocol] = None) -> in
 # Recommended local tokenizer models
 # ============================================================================
 RECOMMENDED_TOKENIZERS = """
-Recommended tokenizer models (place in /Users/cyan/WYH/models/):
+Recommended tokenizer models (place in <project_root>/models/ or set MODELS_DIR env var):
 
 1. GPT-2 (general purpose, good for English and code)
    - Dir name: gpt2
    - HuggingFace: openai-community/gpt2
    - Download:
-     python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('openai-community/gpt2').save_pretrained('/Users/cyan/WYH/models/gpt2')"
+     python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('openai-community/gpt2').save_pretrained('models/gpt2')"
 
 2. Qwen2.5-0.5B (Chinese optimized, recommended for Chinese tasks)
    - Dir name: Qwen2.5-0.5B
    - HuggingFace: Qwen/Qwen2.5-0.5B
    - Download:
-     python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('Qwen/Qwen2.5-0.5B', trust_remote_code=True).save_pretrained('/Users/cyan/WYH/models/Qwen2.5-0.5B')"
+     python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('Qwen/Qwen2.5-0.5B', trust_remote_code=True).save_pretrained('models/Qwen2.5-0.5B')"
 
 Note:
 - GPT-2 tokenizer is small (~1MB), good for general use
 - Qwen2.5-0.5B tokenizer has better Chinese support, recommended for medical dialogue
 - If both downloaded, system auto-selects based on task
+- Set MODELS_DIR environment variable to customize the models directory
 """
 
 
