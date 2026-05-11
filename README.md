@@ -58,9 +58,8 @@
 
 **Rich Baseline Coverage**
 - **3 classic baselines**: Long Context, Embedding RAG, BM25 RAG
-- **4 agentic memory systems**: Mem0, Letta, MemOS, A-MEM
+- **7 agentic memory systems**: Mem0, Letta, MemOS, A-MEM, MIRIX, MemRL, LightMem
 - **4 graph-based systems**: GraphRAG, HippoRAG-v2, ReMem, Zep
-- **3 emerging methods**: MIRIX, MemRL, LightMem
 
 </td>
 </tr>

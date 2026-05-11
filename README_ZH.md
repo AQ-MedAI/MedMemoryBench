@@ -57,10 +57,9 @@
 <td width="50%">
 
 **丰富的基线覆盖**
-- **3 种经典基线**：Long Context、Embedding RAG、BM25 RAG
-- **5 种 Agent 记忆系统**：Mem0、Letta、Zep、MemOS、A-MEM
-- **4 种高级 RAG**：GraphRAG、HippoRAG、Self-RAG、MemoRAG
-- **4 种前沿方法**：MemRL、LightMem、ReMem、MIRIX
+- **3 种经典基线**：Long Context, Embedding RAG, BM25 RAG
+- **7 种结构化 Agentic 记忆系统**：Mem0, Letta, MemOS, A-MEM, MIRIX, MemRL, LightMem
+- **4 种基于图结构的记忆系统**：GraphRAG, HippoRAG-v2, ReMem, Zep
 
 </td>
 </tr>
@@ -253,11 +252,7 @@ pip install -r requirements.txt
 
 > **方法特定依赖：** 部分记忆方法在 `methods/` 下集成了上游包（如 `methods/mem0/`、`methods/memOS/`）。若某方法自带 `requirements.txt` 或 `README`，请按其说明安装。
 
-> **Embedding 模型：** 方法配置引用 `models/` 下的本地 Embedding 模型，运行前请先下载：
-> ```bash
-> python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-zh-v1.5').save('models/bge-small-zh-v1.5')"
-> ```
-> 也可通过 `MODELS_DIR` 环境变量指定自定义模型目录。
+> **Embedding 模型：** 方法配置可引用本地 Embedding 模型或 API，若引用本地配置，运行前请先下载对应的模型。
 
 ### 3. 配置环境变量
 
@@ -292,10 +287,6 @@ EMBEDDING_PROVIDER=openai
 LETTA_DIR=.tmp/letta_runtime
 ```
 
-> **提示：**
-> - Letta 搭配 BigModel 使用时，需先设置 `BIGMODEL_API_KEY` / `BIGMODEL_BASE_URL`，框架会自动映射为 OpenAI 兼容配置。
-> - 建议设置 `LETTA_DIR` 以避免旧版 Letta 的 SQLite 元数据冲突。
-
 ### 4. 运行评测
 
 **通过脚本：**
@@ -320,30 +311,6 @@ python main.py -m embedding_rag_gpt-5.1 -d medmemorybench --resume
 python main.py --list-methods
 python main.py --list-datasets
 ```
-
-> 💡 **想要扩展新方法？** 请参阅 [`methods/README.md`](methods/README.md) 获取详细指南。
-
-<details>
-<summary><b>常见问题排查（Letta + BigModel）</b></summary>
-
-#### `curl` 正常但 Letta 报 `401` / `forbidden`
-
-Letta 运行时可能读取了不同的凭证源。在同一 shell 中验证：
-
-```bash
-python -c "from src.config import load_env_config; c=load_env_config(); \
-  print(bool(c.bigmodel_api_key or c.openai_api_key), c.bigmodel_base_url or c.openai_base_url)"
-```
-
-#### Letta 出现 SQLite schema / migration 错误
-
-将 `LETTA_DIR` 设为隔离的项目本地路径（如 `.tmp/letta_runtime`）后重新运行。
-
-#### 间歇性超时 / 握手超时
-
-通常为网络/代理的瞬态不稳定。请在空闲时段重试，并确保代理设置一致。
-
-</details>
 
 ## 🔧 配置说明
 
