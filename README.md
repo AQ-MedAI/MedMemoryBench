@@ -58,9 +58,9 @@
 
 **Rich Baseline Coverage**
 - **3 classic baselines**: Long Context, Embedding RAG, BM25 RAG
-- **5 agentic memory systems**: Mem0, Letta, Zep, MemOS, A-MEM
-- **4 advanced RAG**: GraphRAG, HippoRAG, Self-RAG, MemoRAG
-- **4 emerging methods**: MemRL, LightMem, ReMem, MIRIX
+- **4 agentic memory systems**: Mem0, Letta, MemOS, A-MEM
+- **4 graph-based systems**: GraphRAG, HippoRAG-v2, ReMem, Zep
+- **3 emerging methods**: MIRIX, MemRL, LightMem
 
 </td>
 </tr>
@@ -242,11 +242,7 @@ pip install -r requirements.txt
 
 > **Method-specific dependencies:** Some memory methods vendor upstream packages under `methods/` (e.g. `methods/mem0/`, `methods/memOS/`). If a method has its own `requirements.txt` or `README`, follow those instructions to enable it.
 
-> **Embedding models:** Method configs reference local embedding models under `models/`. Download before running:
-> ```bash
-> python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-zh-v1.5').save('models/bge-small-zh-v1.5')"
-> ```
-> You can also set `MODELS_DIR` to point to a custom models directory.
+> **Embedding models:** Method configs reference local embedding models or API. For the former, please download the embedded model before running.
 
 ### 3. Configure Environment Variables
 
