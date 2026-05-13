@@ -38,7 +38,7 @@
 
 ## 📰 最新动态
 
-- **[2026.05]** MedMemoryBench v1.0 正式发布 — 包含数据集、评测框架与 16 种记忆方法基线。
+- **[2026.05]** MedMemoryBench v1.0 正式发布 — 包含数据集、评测框架与 14 种记忆方法基线。
 - **[2026.05]** 数据集已上线 [HuggingFace](https://huggingface.co/datasets/Cyan27/MedMemoryBench)。
 
 ## ✨ 特性亮点

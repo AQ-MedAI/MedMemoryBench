@@ -38,7 +38,7 @@
 
 ## 📰 News
 
-- **[2026.05]** MedMemoryBench v1.0 is officially released — dataset, evaluation framework, and 16 memory method baselines.
+- **[2026.05]** MedMemoryBench v1.0 is officially released — dataset, evaluation framework, and 14 memory method baselines.
 - **[2026.05]** Dataset available on [HuggingFace](https://huggingface.co/datasets/Cyan27/MedMemoryBench).
 
 ## ✨ Features
