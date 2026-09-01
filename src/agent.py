@@ -26,6 +26,7 @@ class AgentManager:
         "memos": ("methods.memos_agent", "MemOSAgent"),
         "mirix": ("methods.mirix_agent", "MIRIXAgent"),
         "mem0": ("methods.mem0_agent", "Mem0Agent"),
+        "smart_mem0": ("methods.smart_mem0_agent", "SmartMem0Agent"),
         "mem1": ("methods.mem1_agent", "Mem1Agent"),
         "memrl": ("methods.memrl_agent", "MemRLAgent"),
         "zep": ("methods.zep_agent", "ZepAgent"),

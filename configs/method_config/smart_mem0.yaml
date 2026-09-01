@@ -1,0 +1,53 @@
+method_name: "smart_mem0"
+method_type: "agentic_memory"
+description: "SmartMem0: Adaptive Evidence-Grounded Long-Term Memory"
+
+model:
+  provider: "openai"
+  name: "gemini-3.5-flash-lite"
+  base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
+  temperature: 0.3
+  max_completion_tokens: 8192
+
+agent_params:
+  # Accuracy-first bounded retrieval. Reduce these only after measuring the
+  # accuracy/token trade-off on both MedMemoryBench and LoCoMo.
+  retrieve_num: 8
+  max_context_tokens: 32768
+
+  # Memorize phase
+  enable_memory_write: true
+  frozen_memory_path: null
+  # Increment when capture/consolidation semantics change incompatibly.
+  memory_snapshot_revision: 14
+  # Split long sessions at complete turn boundaries so extraction preserves
+  # low-salience atomic facts instead of compressing them away.
+  write_window_max_turns: 64
+  # A full session is useful as continuity context, but one large extraction
+  # call compresses away low-salience atomic facts. Two bounded turn windows
+  # preserve those facts while keeping write cost bounded.
+  write_window_max_tokens: 3000
+  # full = bounded cross-session beliefs + within-session continuity.
+  # window = continuity only; none = clean ablation without write context.
+  write_context_mode: full
+  write_prior_belief_limit: 8
+  write_provisional_limit: 4
+
+  # Baseline read route: answerability gate for a possible direct seed, then a
+  # typed planner only when the gate cannot answer. The unified controller below
+  # is an explicit latency ablation, not the default architecture.
+  enable_planner: true
+  # Gate first; invoke the planner only when the gate cannot answer from one
+  # seed. This is the optional-planner route used by the locked architecture.
+  enable_unified_controller: false
+  # Keep semantic sufficiency validation for inference, decisions, options,
+  # comparisons, transitions, and multi-slot plans. Simple one-slot plans use
+  # the deterministic typed validator and avoid a redundant LLM call.
+  enable_slot_support_validation: true
+  enable_replan: false
+  enable_zero_result_recovery: true
+  enable_planner_repair: false
+
+embedding:
+  provider: "local"
+  model: "sentence-transformers/all-MiniLM-L6-v2"
