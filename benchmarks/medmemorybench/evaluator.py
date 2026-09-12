@@ -2,6 +2,7 @@
 
 import hashlib
 import copy
+import gc
 import json
 import os
 import sys
@@ -170,6 +171,10 @@ class MedMemoryBenchEvaluator:
         self._judge_batch_fallback_logged = False
         self._deferred_judges: List[Dict[str, Any]] = []
         self._pending_batch_queries: List[Dict[str, Any]] = []
+        self._pending_query_plan_requests: List[Dict[str, Any]] = []
+        self._compiler_cache_hits = 0
+        self._compiler_cache_misses = 0
+        self._compiler_calls_this_run = 0
         self._api_failures: List[Dict[str, Any]] = []
         self._api_failure_duration_seconds = 0.0
         self._api_failure_lock = threading.Lock()
@@ -1207,6 +1212,91 @@ class MedMemoryBenchEvaluator:
         if getattr(self, "execution_stage", "all") == "query":
             return compute_query_config_hash(self.method_config, self.dataset_config)
         return compute_config_hash(self.method_config, self.dataset_config)
+
+    def _query_compiler_cache_config(self) -> Dict[str, Any]:
+        retrieval = (getattr(self.method_config, "raw_config", {}) or {}).get("retrieval_config", {})
+        configured_path = retrieval.get("query_compiler_plan_cache_path")
+        return {
+            "enabled": bool(retrieval.get("query_compiler_plan_cache_enabled", True)),
+            "path": Path(configured_path) if configured_path else self.output_dir / "query_compiler_plans.jsonl",
+        }
+
+    def _query_compiler_cache_fingerprint_payload(
+        self, question: str, reference_time: Optional[str] = None, *, include_max_tokens: bool = True,
+    ) -> Dict[str, Any]:
+        """Return compiler-only cache inputs, optionally in the legacy shape."""
+        retrieval = (getattr(self.method_config, "raw_config", {}) or {}).get("retrieval_config", {})
+        model = self.method_config.model
+        payload = {
+            "question_sha256": hashlib.sha256(question.encode("utf-8")).hexdigest(),
+            "reference_time": reference_time,
+            "provider": getattr(model, "provider", None), "model": getattr(model, "name", None),
+            "prompt_version": "event_state_query_compiler_v2", "schema_version": 2,
+            "max_searches": retrieval.get("query_compiler_max_searches", 3),
+            "temperature": retrieval.get("planner_temperature", 0.0),
+        }
+        if include_max_tokens:
+            payload["query_compiler_max_tokens"] = retrieval.get("query_compiler_max_tokens", 256)
+        return payload
+
+    def _query_compiler_cache_fingerprint(self, question: str, reference_time: Optional[str] = None) -> str:
+        """Fingerprint compiler inputs only; retrieval changes reuse plans."""
+        payload = self._query_compiler_cache_fingerprint_payload(question, reference_time)
+        return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=True).encode("utf-8")).hexdigest()
+
+    def _legacy_query_compiler_cache_entry(
+        self, plan_cache: Dict[str, Dict[str, Any]], question: str, reference_time: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Reuse pre-token-limit v2 rows only at their known default of 256."""
+        retrieval = (getattr(self.method_config, "raw_config", {}) or {}).get("retrieval_config", {})
+        if retrieval.get("query_compiler_max_tokens", 256) != 256:
+            return None
+        payload = self._query_compiler_cache_fingerprint_payload(
+            question, reference_time, include_max_tokens=False,
+        )
+        fingerprint = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, ensure_ascii=True).encode("utf-8")
+        ).hexdigest()
+        return plan_cache.get(fingerprint)
+
+    def _load_query_compiler_plan_cache(self) -> Dict[str, Dict[str, Any]]:
+        config = self._query_compiler_cache_config()
+        if not config["enabled"] or not config["path"].is_file():
+            return {}
+        try:
+            with config["path"].open("r", encoding="utf-8") as handle:
+                return {
+                    entry["fingerprint"]: entry for entry in map(json.loads, handle)
+                    if isinstance(entry, dict) and isinstance(entry.get("fingerprint"), str)
+                    and isinstance(entry.get("raw_model_output"), str)
+                }
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            self._log(f"Ignoring unreadable query compiler plan cache: {exc}", level="WARNING")
+            return {}
+
+    def _append_query_compiler_plan_cache(self, entry: Dict[str, Any]) -> None:
+        config = self._query_compiler_cache_config()
+        if not config["enabled"]:
+            return
+        try:
+            config["path"].parent.mkdir(parents=True, exist_ok=True)
+            with config["path"].open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, ensure_ascii=True, sort_keys=True) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as exc:
+            self._log(f"Could not persist query compiler plan cache: {exc}", level="WARNING")
+
+    @staticmethod
+    def _export_event_state_for_transfer(manager: AgentManager, context_id: Any) -> Dict[str, Any]:
+        """Clone immutable snapshot state for stage-two local retrieval."""
+        state = manager.export_memory_state(context_id=context_id)
+        exporter = getattr(manager, "export_memory_binary_artifacts", None)
+        if callable(exporter):
+            artifacts = exporter(context_id=context_id)
+            if artifacts:
+                state["embedding_artifacts"] = artifacts
+        return state
 
     def _answer_query_kwargs(self, query: MedQuery) -> Dict[str, Any]:
         """Keep benchmark type metadata out of neutral agent-facing requests."""
@@ -3368,7 +3458,15 @@ class MedMemoryBenchEvaluator:
             batch_client = self._get_batch_client()
             combined_stage = "query-final"
             legacy_stage = f"query-unit-{unit.unit_id}"
-            if not batch_client.has_stage(combined_stage) and batch_client.has_stage(legacy_stage):
+            uses_query_compiler = bool(
+                getattr(self, "agent_manager", None)
+                and getattr(self.agent_manager, "uses_query_compiler", lambda: False)()
+            )
+            if (
+                not uses_query_compiler
+                and not batch_client.has_stage(combined_stage)
+                and batch_client.has_stage(legacy_stage)
+            ):
                 query_results = self._evaluate_batch_queries(unit, memory_time_per_query)
             else:
                 prepared_count = self._prepare_combined_batch_queries(
@@ -3720,6 +3818,71 @@ class MedMemoryBenchEvaluator:
         batch_client = self._get_batch_client()
         prepared_count = 0
 
+        # Query-compiler plans are a dependency of local retrieval, so final
+        # prompts cannot be frozen until the shared query-plan stage completes.
+        if self.agent_manager and getattr(self.agent_manager, "uses_query_compiler", lambda: False)():
+            event_state_snapshot = self._export_event_state_for_transfer(
+                self.agent_manager, unit.context_id,
+            )
+            plan_cache = self._load_query_compiler_plan_cache()
+            for query in unit.queries_to_evaluate:
+                if (
+                    self._checkpoint_manager
+                    and self._checkpoint_manager.is_query_completed(
+                        query.query_id, persona_id=unit.context_id
+                    )
+                ):
+                    self._log(f"    [Skip] {query.query_id} (completed)")
+                    continue
+                if self._is_deferred_judge_query(query.query_id):
+                    self._log(f"    [Skip] {query.query_id} (awaiting saved Vertex judge result)")
+                    continue
+                final_id = make_request_id(
+                    "query", f"{self.method_config.method_name}:{unit.unit_id}:{query.query_id}",
+                )
+                saved_final = batch_client.get_saved_request(stage, final_id)
+                restored_final = restore_prepared_query(saved_final) if saved_final else None
+                if restored_final is not None:
+                    self._pending_batch_queries.append({
+                        "request": saved_final, "query": query, "prepared": restored_final,
+                        "persona_id": unit.context_id, "unit_id": unit.unit_id,
+                        "memory_time_per_query": memory_time_per_query,
+                        "compiler_usage": {"transport": "resume", "call_count": 0, "cache_hit": False},
+                    })
+                    prepared_count += 1
+                    continue
+                compiler = self.agent_manager.prepare_query_compiler(query.question)
+                reference_time = None
+                fingerprint = self._query_compiler_cache_fingerprint(query.question, reference_time)
+                cached = plan_cache.get(fingerprint) or self._legacy_query_compiler_cache_entry(
+                    plan_cache, query.question, reference_time,
+                )
+                self._compiler_cache_hits += int(cached is not None)
+                self._compiler_cache_misses += int(cached is None)
+                self._pending_query_plan_requests.append({
+                    "request": BatchChatRequest(
+                        request_id=make_request_id(
+                            "query-plan", f"{self.method_config.method_name}:{unit.unit_id}:{query.query_id}",
+                        ),
+                        messages=compiler["messages"], temperature=compiler["temperature"],
+                        max_tokens=compiler["max_tokens"], response_format=compiler.get("response_format"),
+                        phase="query-plan",
+                        metadata={"query_id": query.query_id, "unit_id": unit.unit_id, "context_id": unit.context_id},
+                    ),
+                    "query": query,
+                    "question": self._format_query_prompt(query.question, query.query_type),
+                    "raw_question": query.question,
+                    "persona_id": unit.context_id,
+                    "unit_id": unit.unit_id,
+                    "memory_state": event_state_snapshot,
+                    "memory_time_per_query": memory_time_per_query,
+                    "reference_time": reference_time,
+                    "compiler_fingerprint": fingerprint,
+                    "cached_plan": cached,
+                })
+                prepared_count += 1
+            return prepared_count
+
         query_items = []
         for query in unit.queries_to_evaluate:
             if (
@@ -3833,6 +3996,98 @@ class MedMemoryBenchEvaluator:
 
     def _complete_combined_batch_queries(self) -> List[Dict[str, Any]]:
         """Submit all frozen final-answer prompts in one provider batch job."""
+        if getattr(self, "_pending_query_plan_requests", []):
+            batch_client = self._get_batch_client()
+            pending_plans = self._pending_query_plan_requests
+            self._pending_query_plan_requests = []
+            misses = [item for item in pending_plans if item["cached_plan"] is None]
+            saved_requests = batch_client.get_saved_requests("query-plan") if misses else []
+            expected_ids = {item["request"].request_id for item in misses}
+            requests = (
+                saved_requests
+                if {request.request_id for request in saved_requests} == expected_ids
+                else [item["request"] for item in misses]
+            )
+            self._log(f"[Vertex] Stage 'query-plan': dispatching {len(requests):,} combined compiler request(s).")
+            tracker = get_usage_tracker()
+            tracker.set_phase("query")
+            with tracker.scope("query.compiler_batch"):
+                responses = batch_client.run_stage("query-plan", requests) if requests else {}
+            self._compiler_calls_this_run += len(requests)
+            managers: Dict[Any, AgentManager] = {}
+            try:
+                for item in pending_plans:
+                    cached = item["cached_plan"]
+                    batch_response = responses.get(item["request"].request_id)
+                    content = cached["raw_model_output"] if cached is not None else (
+                        batch_response.content if batch_response is not None and not batch_response.status else ""
+                    )
+                    context_id = item["persona_id"]
+                    manager = managers.get(context_id)
+                    if manager is None:
+                        manager = AgentManager(
+                            method_config=self.method_config, dataset_config=self.dataset_config,
+                            batch_api=self.batch_api, batch_gcs_uri=self.batch_gcs_uri,
+                            batch_wait=self.batch_wait, workers=1,
+                        )
+                        manager.import_memory_state(item["memory_state"], context_id=context_id)
+                        managers[context_id] = manager
+                    item["memory_state"] = None
+                    prepared = manager.prepare_query_compiler_result(
+                        item["question"], content, context_id=context_id,
+                        **self._answer_query_kwargs(item["query"]),
+                    )
+                    diagnostics = prepared.get("extra", {}).get("query_compiler", {})
+                    if cached is None and diagnostics.get("compiler_validation_success"):
+                        retrieval = (getattr(self.method_config, "raw_config", {}) or {}).get("retrieval_config", {})
+                        self._append_query_compiler_plan_cache({
+                            "fingerprint": item["compiler_fingerprint"],
+                            "question_sha256": hashlib.sha256(item["raw_question"].encode("utf-8")).hexdigest(),
+                            "reference_time": item["reference_time"],
+                            "provider": getattr(self.method_config.model, "provider", None),
+                            "model": getattr(self.method_config.model, "name", None),
+                            "prompt_version": "event_state_query_compiler_v2", "schema_version": 2,
+                            "max_searches": retrieval.get("query_compiler_max_searches", 3),
+                            "query_compiler_max_tokens": retrieval.get("query_compiler_max_tokens", 256),
+                            "temperature": retrieval.get("planner_temperature", 0.0),
+                            "raw_model_output": content, "validated_plan": diagnostics.get("validated_plan"),
+                            "parse_success": diagnostics.get("compiler_parse_success"),
+                            "salvage_used": diagnostics.get("compiler_salvage_used"),
+                            "warning_codes": diagnostics.get("compiler_warning_codes", []),
+                        })
+                    final_request = BatchChatRequest(
+                        request_id=make_request_id(
+                            "query", f"{self.method_config.method_name}:{item['unit_id']}:{item['query'].query_id}",
+                        ),
+                        messages=prepared["messages"], temperature=self.method_config.model.temperature,
+                        max_tokens=(self.method_config.model.max_completion_tokens or self.method_config.model.max_tokens),
+                        phase="query",
+                        metadata={
+                            "query_id": item["query"].query_id, "unit_id": item["unit_id"],
+                            "context_id": context_id,
+                            PREPARED_QUERY_METADATA_KEY: snapshot_prepared_query(prepared),
+                        },
+                    )
+                    self._pending_batch_queries.append({
+                        "request": final_request, "query": item["query"], "prepared": prepared,
+                        "persona_id": context_id, "unit_id": item["unit_id"],
+                        "memory_time_per_query": item["memory_time_per_query"],
+                        "compiler_usage": {
+                            "transport": "cache" if cached is not None else "batch",
+                            "input_tokens": 0 if cached is not None else getattr(batch_response, "input_tokens", 0),
+                            "output_tokens": 0 if cached is not None else getattr(batch_response, "output_tokens", 0),
+                            "call_count": 0 if cached is not None else 1,
+                            "cache_hit": cached is not None,
+                        },
+                    })
+            finally:
+                managers.clear()
+                pending_plans.clear()
+                if isinstance(responses, dict):
+                    responses.clear()
+                gc.collect()
+            return self._complete_combined_batch_queries()
+
         if not self._pending_batch_queries:
             return []
 
@@ -3895,9 +4150,8 @@ class MedMemoryBenchEvaluator:
                         answer_messages=item["prepared"].get("messages"),
                     ),
                     execution_usage={
-                        "answer": self._batch_response_usage(
-                            batch_response, transport="batch"
-                        ),
+                        "answer": self._batch_response_usage(batch_response, transport="batch"),
+                        **({"query_compiler": item["compiler_usage"]} if item.get("compiler_usage") else {}),
                     },
                 )
             except LLMAPIError as e:

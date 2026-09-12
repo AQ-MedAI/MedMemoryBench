@@ -148,6 +148,68 @@ def test_combined_batch_progress_completes_before_deferred_judging():
     assert progress.updates == [1, 1]
 
 
+def test_medmemorybench_query_compiler_batches_plan_before_final_prompt(monkeypatch, tmp_path: Path):
+    class CompilerManager(_AgentManager):
+        def uses_query_compiler(self):
+            return True
+
+        def export_memory_state(self, *, context_id):
+            return {"context_id": context_id}
+
+        def prepare_query_compiler(self, question):
+            return {
+                "messages": [{"role": "user", "content": f"compile:{question}"}],
+                "temperature": 0.0, "max_tokens": 256,
+            }
+
+        def prepare_batch_query(self, *_args, **_kwargs):
+            raise AssertionError("query compiler mode must complete query-plan before final preparation")
+
+    class CompilerWorker(CompilerManager):
+        def import_memory_state(self, state, *, context_id):
+            self.context_id = context_id
+
+        def prepare_query_compiler_result(self, question, content, *, context_id, **_kwargs):
+            return {
+                "messages": [{"role": "user", "content": f"planned:{context_id}:{question}:{content}"}],
+                "retrieved_count": 0, "retrieved_memories": [], "extra": {},
+            }
+
+    monkeypatch.setattr("benchmarks.medmemorybench.evaluator.AgentManager", lambda **_kwargs: CompilerWorker())
+    evaluator = _evaluator_state(MedMemoryBenchEvaluator.__new__(MedMemoryBenchEvaluator))
+    evaluator.agent_manager = CompilerManager()
+    evaluator.method_config = SimpleNamespace(
+        method_name="event_state",
+        model=SimpleNamespace(provider="vertex", name="test", temperature=0.0, max_completion_tokens=100, max_tokens=100),
+        raw_config={"retrieval_config": {"planner_mode": "query_compiler"}},
+    )
+    evaluator.dataset_config = SimpleNamespace()
+    evaluator.output_dir = tmp_path
+    evaluator.batch_api = True
+    evaluator.batch_gcs_uri = None
+    evaluator.batch_wait = True
+    evaluator._pending_query_plan_requests = []
+    evaluator._compiler_cache_hits = evaluator._compiler_cache_misses = evaluator._compiler_calls_this_run = 0
+    evaluator._checkpoint_manager = None
+    evaluator._deferred_judges = []
+    evaluator._record_batch_api_failure = lambda *args, **kwargs: None
+    evaluator._score_agent_response = lambda query, response, **kwargs: SimpleNamespace(
+        query_id=query.query_id, query_type=query.query_type, is_correct=True, score=1.0,
+    )
+
+    evaluator._prepare_combined_batch_queries(
+        EvaluationUnit(0, [], [_query("q0")], context_id=10), memory_time_per_query=1.0,
+    )
+    assert evaluator._pending_batch_queries == []
+    assert len(evaluator._pending_query_plan_requests) == 1
+
+    finalized = evaluator._complete_combined_batch_queries()
+
+    assert [stage for stage, _requests in evaluator._batch_client.calls] == ["query-plan", "query-final"]
+    assert finalized[0]["persona_id"] == 10
+    assert evaluator._compiler_calls_this_run == 1
+
+
 def test_locomo_combines_samples_into_one_final_answer_stage(monkeypatch):
     class Progress:
         instances = []
