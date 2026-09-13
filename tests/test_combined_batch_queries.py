@@ -10,6 +10,8 @@ from benchmarks.base import EvaluationUnit
 from benchmarks.locomo.evaluator import LoCoMoEvaluator
 from benchmarks.medmemorybench.checkpoint import MedMemoryBenchCheckpointManager
 from benchmarks.medmemorybench.evaluator import MedMemoryBenchEvaluator
+from methods.event_state.schemas import Episode, TurnEvidence
+from methods.event_state.store import EventStateStore
 
 
 class _BatchClient:
@@ -149,12 +151,19 @@ def test_combined_batch_progress_completes_before_deferred_judging():
 
 
 def test_medmemorybench_query_compiler_batches_plan_before_final_prompt(monkeypatch, tmp_path: Path):
+    created_workers = []
+
     class CompilerManager(_AgentManager):
+        def __init__(self):
+            self.snapshot = {"marker": None}
+
         def uses_query_compiler(self):
             return True
 
         def export_memory_state(self, *, context_id):
-            return {"context_id": context_id}
+            # Match EventStateStore.export(): this nested metadata remains a
+            # live reference unless the evaluator freezes it for stage two.
+            return {"context_id": context_id, "snapshot": self.snapshot}
 
         def prepare_query_compiler(self, question):
             return {
@@ -168,14 +177,20 @@ def test_medmemorybench_query_compiler_batches_plan_before_final_prompt(monkeypa
     class CompilerWorker(CompilerManager):
         def import_memory_state(self, state, *, context_id):
             self.context_id = context_id
+            self.snapshot = state["snapshot"]
 
         def prepare_query_compiler_result(self, question, content, *, context_id, **_kwargs):
             return {
-                "messages": [{"role": "user", "content": f"planned:{context_id}:{question}:{content}"}],
+                "messages": [{"role": "user", "content": f"planned:{self.snapshot['marker']}:{question}:{content}"}],
                 "retrieved_count": 0, "retrieved_memories": [], "extra": {},
             }
 
-    monkeypatch.setattr("benchmarks.medmemorybench.evaluator.AgentManager", lambda **_kwargs: CompilerWorker())
+    def make_worker(**_kwargs):
+        worker = CompilerWorker()
+        created_workers.append(worker)
+        return worker
+
+    monkeypatch.setattr("benchmarks.medmemorybench.evaluator.AgentManager", make_worker)
     evaluator = _evaluator_state(MedMemoryBenchEvaluator.__new__(MedMemoryBenchEvaluator))
     evaluator.agent_manager = CompilerManager()
     evaluator.method_config = SimpleNamespace(
@@ -197,17 +212,62 @@ def test_medmemorybench_query_compiler_batches_plan_before_final_prompt(monkeypa
         query_id=query.query_id, query_type=query.query_type, is_correct=True, score=1.0,
     )
 
+    evaluator.agent_manager.snapshot["marker"] = "unit-0"
     evaluator._prepare_combined_batch_queries(
         EvaluationUnit(0, [], [_query("q0")], context_id=10), memory_time_per_query=1.0,
     )
+    evaluator.agent_manager.snapshot["marker"] = "unit-1"
+    evaluator._prepare_combined_batch_queries(
+        EvaluationUnit(1, [], [_query("q1")], context_id=10), memory_time_per_query=1.0,
+    )
     assert evaluator._pending_batch_queries == []
-    assert len(evaluator._pending_query_plan_requests) == 1
+    assert len(evaluator._pending_query_plan_requests) == 2
 
     finalized = evaluator._complete_combined_batch_queries()
 
     assert [stage for stage, _requests in evaluator._batch_client.calls] == ["query-plan", "query-final"]
-    assert finalized[0]["persona_id"] == 10
-    assert evaluator._compiler_calls_this_run == 1
+    assert [item["persona_id"] for item in finalized] == [10, 10]
+    assert evaluator._compiler_calls_this_run == 2
+    assert len(created_workers) == 2
+    final_requests = evaluator._batch_client.calls[1][1]
+    assert [request.messages[-1]["content"] for request in final_requests] == [
+        "planned:unit-0:question-q0:answer-q0",
+        "planned:unit-1:question-q1:answer-q1",
+    ]
+
+
+def test_medmemorybench_event_state_transfer_freezes_embedding_metadata():
+    store = EventStateStore("persona")
+
+    def add_episode(identifier: str):
+        store.add_episode(
+            Episode(
+                identifier, "persona", identifier, 0, None, None, ["Patient"],
+                "primary_user", "", "", [TurnEvidence("t1", "Patient", "user", identifier)],
+            ),
+            [1.0, 0.0],
+            [[0.0, 1.0]],
+        )
+
+    add_episode("E1")
+
+    class Manager:
+        def export_memory_state(self, *, context_id):
+            return store.export()
+
+        def export_memory_binary_artifacts(self, *, context_id):
+            return store.export_embedding_artifacts()
+
+    frozen = MedMemoryBenchEvaluator._export_event_state_for_transfer(
+        Manager(), "persona"
+    )
+    # Later cumulative units mutate the source store after their predecessor
+    # has queued its compiler request.
+    add_episode("E2")
+
+    restored = EventStateStore.from_export(frozen)
+    assert set(restored.turn_metadata) == {store.turn_key("E1", 0)}
+    assert set(restored.turn_embeddings) == {store.turn_key("E1", 0)}
 
 
 def test_locomo_combines_samples_into_one_final_answer_stage(monkeypatch):

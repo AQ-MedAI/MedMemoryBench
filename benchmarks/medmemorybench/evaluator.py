@@ -1289,14 +1289,18 @@ class MedMemoryBenchEvaluator:
 
     @staticmethod
     def _export_event_state_for_transfer(manager: AgentManager, context_id: Any) -> Dict[str, Any]:
-        """Clone immutable snapshot state for stage-two local retrieval."""
+        """Freeze one unit's retrieval state for delayed stage-two work."""
         state = manager.export_memory_state(context_id=context_id)
         exporter = getattr(manager, "export_memory_binary_artifacts", None)
         if callable(exporter):
             artifacts = exporter(context_id=context_id)
             if artifacts:
                 state["embedding_artifacts"] = artifacts
-        return state
+        # EventStateStore.export() intentionally avoids copying its derived
+        # metadata maps. A persona's later units extend those maps before the
+        # compiler batch finishes, so retain a fully independent point-in-time
+        # state with embeddings and metadata from the same unit.
+        return copy.deepcopy(state)
 
     def _answer_query_kwargs(self, query: MedQuery) -> Dict[str, Any]:
         """Keep benchmark type metadata out of neutral agent-facing requests."""
@@ -2812,6 +2816,12 @@ class MedMemoryBenchEvaluator:
         """
         if not hasattr(self, "_pending_batch_queries"):
             self._pending_batch_queries = []
+        if not hasattr(self, "_pending_query_plan_requests"):
+            self._pending_query_plan_requests = []
+        if not hasattr(self, "_compiler_cache_hits"):
+            self._compiler_cache_hits = 0
+        if not hasattr(self, "_compiler_cache_misses"):
+            self._compiler_cache_misses = 0
         if not hasattr(self, "_api_failures"):
             self._api_failures = []
         pending_units: List[tuple[EvaluationUnit, Dict[str, Any]]] = []
@@ -2899,6 +2909,9 @@ class MedMemoryBenchEvaluator:
             worker._memory_build_logs = []
             worker._source_memory_build_logs = []
             worker._pending_batch_queries = []
+            # A shallow evaluator copy would otherwise share this list with
+            # the coordinator and sibling query-unit workers.
+            worker._pending_query_plan_requests = []
             worker._deferred_judges = []
             worker._api_failures = []
             worker._api_failure_duration_seconds = 0.0
@@ -3010,6 +3023,11 @@ class MedMemoryBenchEvaluator:
                 + worker._api_failure_duration_seconds
             )
             self._pending_batch_queries.extend(worker._pending_batch_queries)
+            self._pending_query_plan_requests.extend(
+                worker._pending_query_plan_requests
+            )
+            self._compiler_cache_hits += getattr(worker, "_compiler_cache_hits", 0)
+            self._compiler_cache_misses += getattr(worker, "_compiler_cache_misses", 0)
             self._deferred_judges.extend(worker._deferred_judges)
             for result in item["results"]:
                 self.aggregator.add_result(result)
@@ -4014,7 +4032,10 @@ class MedMemoryBenchEvaluator:
             with tracker.scope("query.compiler_batch"):
                 responses = batch_client.run_stage("query-plan", requests) if requests else {}
             self._compiler_calls_this_run += len(requests)
-            managers: Dict[Any, AgentManager] = {}
+            # A persona can own several evaluation units, each with a distinct
+            # cumulative memory snapshot. Context ID alone therefore cannot
+            # identify a stage-two retrieval worker.
+            managers: Dict[tuple[Any, Any], AgentManager] = {}
             try:
                 for item in pending_plans:
                     cached = item["cached_plan"]
@@ -4023,7 +4044,8 @@ class MedMemoryBenchEvaluator:
                         batch_response.content if batch_response is not None and not batch_response.status else ""
                     )
                     context_id = item["persona_id"]
-                    manager = managers.get(context_id)
+                    manager_key = (item["unit_id"], context_id)
+                    manager = managers.get(manager_key)
                     if manager is None:
                         manager = AgentManager(
                             method_config=self.method_config, dataset_config=self.dataset_config,
@@ -4031,7 +4053,7 @@ class MedMemoryBenchEvaluator:
                             batch_wait=self.batch_wait, workers=1,
                         )
                         manager.import_memory_state(item["memory_state"], context_id=context_id)
-                        managers[context_id] = manager
+                        managers[manager_key] = manager
                     item["memory_state"] = None
                     prepared = manager.prepare_query_compiler_result(
                         item["question"], content, context_id=context_id,
