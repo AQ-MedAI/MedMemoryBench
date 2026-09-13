@@ -41,6 +41,15 @@ def test_score_calibration_is_deterministic_for_equal_negative_and_single_values
     assert calibrate_scores([.55, .9], "minmax") == [0.0, 1.0]
 
 
+def test_yaml_false_and_legacy_null_modes_resolve_to_legacy_defaults():
+    agent = EventStateAgent(
+        embedding_client=Embedder(), local_reranker_mode=False,
+        temporal_query_mode=None,
+    )
+    assert agent._retrieval_config["local_reranker_mode"] == "off"
+    assert agent._retrieval_config["temporal_query_mode"] == "legacy"
+
+
 def test_weighted_score_fusion_retains_dense_magnitude_and_rrf_remains_available():
     store = EventStateStore("fusion")
     retriever = EventStateRetriever(store, Embedder(), fusion_mode="weighted_score", score_calibration_mode="minmax")
