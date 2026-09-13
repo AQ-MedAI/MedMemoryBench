@@ -84,8 +84,8 @@ the parent immutable turn and never create dense embeddings.
 
 Episode scoring is `summary` by default or `summary_plus_best_turn`, a
 normalized blend of `episode_summary_weight` and `episode_best_turn_weight`.
-Excerpt allocation is `global` by default or `joint`; joint reserves existing
-excerpt slots for selected support turns before the global allocator runs.
+Excerpt allocation is `global` by default or `joint`; joint globally ranks
+selected support turns before the global allocator fills remaining slots.
 
 `temporal_query_mode: dual_axis_semantic` only reranks semantic candidates. It
 computes event-time and record-time compatibility separately and applies
@@ -96,3 +96,75 @@ both axes adds a bounded confidence increment. Missing event time is neutral.
 the bounded top-k pool using `(1-alpha)*base + alpha*calibrated_reranker`, is
 process-shared per model, and does not run or load when off. Adaptive evidence
 uses top-score gap and strong-candidate count between the configured bounds.
+
+## Query-Local Source Coherence
+
+`_source_ids()` remains the canonical full-provenance view: every session in a
+claim's `EvidenceRef`s remains visible and renderable. Query-time source
+coherence must not treat each corroborating session as equally relevant,
+however. Under the default `query_relevant` mode, Event-State scores persisted
+immutable source-turn vectors against the current query, takes the best turn
+per reference, takes the best reference per source session, and keeps the
+configured strongest session count. It never sums arbitrary turn counts.
+
+```yaml
+source_coherence_claim_source_mode: query_relevant # or all_provenance
+source_coherence_claim_max_sources: 2
+source_coherent_use_state_relation_bonus: true
+source_coherent_use_representation_balance_bonus: true
+source_coherent_use_source_diversity_bonus: false
+```
+
+`all_provenance` is retained for backwards-comparison ablations. If cited turn
+vectors are unavailable, the selector deterministically uses an available
+reference (preferring `origin`) and ultimately full provenance; the claim is
+never discarded. Diagnostics separately report full-provenance and query-local
+source counts/IDs, preferred-source scores, selected preferred/non-preferred
+items, query-local claims, and full-provenance fallbacks. Source preference is
+soft: MMR relevance and redundancy still apply, so strong non-preferred items
+can be selected. State relation and representation bonuses are explicit in
+source-coherent mode; source diversity is off there by default.
+
+## Global Joint Excerpts
+
+`episode_excerpt_mode: global` is unchanged. In `joint` mode, Event-State now
+collects one scored preferred support turn from each selected episode,
+deduplicates against claim provenance, direct immutable turns, and duplicate
+episode turns, then ranks all eligible support turns globally by query-turn
+similarity. It reserves the strongest ones up to
+`max_episode_source_excerpts_total`, and uses the established global allocator
+only to fill remaining slots. This prevents selected-episode iteration order
+from consuming the excerpt budget. Diagnostics include support candidates,
+reserved/global-fill/dedup counts, and bounded selected support-turn IDs.
+
+`summary_plus_best_turn` uses a runtime-only `episode_id -> tuple[turn_key,
+...]` index. It is rebuilt from snapshots, contains neither raw text nor
+embeddings, and avoids scanning every turn for every episode.
+
+## Numbered Ablations
+
+The full configs in `configs/method_config/test/` share model, embedding,
+build, answer, evidence-budget, candidate-depth, planner-off, shared-manager,
+and RAM-guard settings. Cross-encoder and adaptive evidence are off/fixed.
+
+| config | BM25 | episode support | selector | excerpts | fusion | temporal |
+| --- | --- | --- | --- | --- | --- | --- |
+| gemini1 | no | summary | state MMR | global | RRF | legacy |
+| gemini2 | chunks | summary | state MMR | global | RRF | legacy |
+| gemini3 | chunks | summary + best turn | state MMR | global | RRF | legacy |
+| gemini4 | chunks | summary + best turn | state MMR, no source diversity | global | RRF | legacy |
+| gemini5 | chunks | summary + best turn | state MMR, lambda .85 | global | RRF | legacy |
+| gemini6 | chunks | summary + best turn | query-local source coherent | global | RRF | legacy |
+| gemini7 | chunks | summary + best turn | state MMR | joint/global ranked | RRF | legacy |
+| gemini8 | chunks | summary + best turn | state MMR | global | weighted/minmax | legacy |
+| gemini9 | chunks | summary + best turn | state MMR | global | RRF | dual axis |
+| gemini10 | chunks | summary + best turn | query-local source coherent | joint/global ranked | RRF | legacy |
+
+Use the normal query stage against a frozen snapshot, for example:
+
+```bash
+python3 main.py -m test/event_state_gemini3 -d locomo_1 --stage query --memory-run <memory-run-directory>
+```
+
+The repository has no separate no-answer retrieval-only CLI, so correctness
+tests validate implementation but not benchmark effectiveness.

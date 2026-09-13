@@ -325,6 +325,73 @@ def select_global_episode_evidence(
     return selected, len(candidates), deduplicated
 
 
+def select_joint_episode_support_evidence(
+    support_candidates: Sequence[Tuple[int, Episode, Any, float]],
+    limit: int,
+    excluded_turns: set[Tuple[str, Any]] | None = None,
+) -> Tuple[Dict[str, List[Any]], int, int, List[Tuple[str, Any]]]:
+    """Globally reserve the strongest selected-episode support turns.
+
+    One preferred support turn may be supplied per episode.  This first pass
+    deliberately does not promise every episode a slot; the normal global
+    allocator fills any remaining budget afterward.
+    """
+    excluded = excluded_turns or set()
+    eligible = []
+    deduplicated = 0
+    seen = set()
+    for _rank, episode, turn, score in support_candidates:
+        key = (episode.episode_id, turn.turn_id)
+        if key in excluded or key in seen:
+            deduplicated += 1
+            continue
+        seen.add(key)
+        eligible.append((float(score), str(episode.source_session_id), episode.episode_id, str(turn.turn_id), turn))
+    chosen = sorted(eligible, key=lambda row: (-row[0], row[1], row[2], row[3]))[:max(0, int(limit))]
+    selected: Dict[str, List[Any]] = {}
+    selected_keys = []
+    for _score, _source, episode_id, _turn_id, turn in chosen:
+        selected.setdefault(episode_id, []).append(turn)
+        selected_keys.append((episode_id, turn.turn_id))
+    return selected, len(eligible), deduplicated, selected_keys
+
+
+def select_joint_episode_evidence(
+    selected_episodes: Sequence[Tuple[int, Episode]],
+    support_candidates: Sequence[Tuple[int, Episode, Any, float]],
+    query_vector: Sequence[float],
+    embedder: Any,
+    limit: int,
+    excluded_turns: set[Tuple[str, Any]] | None = None,
+    query_vectors: Sequence[Sequence[float]] | None = None,
+    turn_vector_cache: Dict[Tuple[str, Any], Sequence[float]] | None = None,
+) -> Tuple[Dict[str, List[Any]], Dict[str, Any]]:
+    """Reserve globally ranked support turns, then globally fill spare slots."""
+    selected, support_count, support_deduplicated, support_keys = select_joint_episode_support_evidence(
+        support_candidates, limit, excluded_turns,
+    )
+    global_fill, global_candidates, global_deduplicated = select_global_episode_evidence(
+        selected_episodes,
+        query_vector,
+        embedder,
+        max(0, int(limit) - len(support_keys)),
+        (excluded_turns or set()) | set(support_keys),
+        query_vectors=query_vectors,
+        turn_vector_cache=turn_vector_cache,
+    )
+    for episode_id, turns in global_fill.items():
+        selected.setdefault(episode_id, []).extend(turns)
+    return selected, {
+        "support_candidate_count": support_count,
+        "support_reserved_count": len(support_keys),
+        "support_deduplicated_count": support_deduplicated,
+        "support_turn_keys": support_keys,
+        "global_fill_count": sum(len(turns) for turns in global_fill.values()),
+        "global_candidate_count": global_candidates,
+        "global_deduplicated_count": global_deduplicated,
+    }
+
+
 def claim_evidence_turn_keys(
     claim: Claim,
     episodes: Dict[str, Episode],

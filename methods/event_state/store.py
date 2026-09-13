@@ -7,7 +7,7 @@ import json
 import re
 import threading
 from dataclasses import asdict, replace
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -40,6 +40,9 @@ class EventStateStore:
         # memory layer. Keys are stable across exported snapshots.
         self.turn_embeddings: Dict[str, List[float]] = {}
         self.turn_metadata: Dict[str, Dict[str, Any]] = {}
+        # Runtime-only episode membership index.  It stores stable turn keys,
+        # not source text or vectors, and is rebuilt for legacy snapshots.
+        self.episode_turn_keys: Dict[str, Tuple[str, ...]] = {}
         self.claim_embeddings: Dict[str, List[float]] = {}
         self.claim_slot_embeddings: Dict[str, List[float]] = {}
         # Rebuildable provenance index: a raw turn can support several events.
@@ -91,8 +94,10 @@ class EventStateStore:
         episode: Episode,
         vectors: Optional[List[List[float]]] = None,
     ) -> None:
+        keys = []
         for turn_index, turn in enumerate(episode.turn_evidence):
             key = self.turn_key(episode.episode_id, turn_index)
+            keys.append(key)
             self.turn_metadata[key] = {
                 "episode_id": episode.episode_id,
                 "source_session_id": turn.source_session_id
@@ -104,9 +109,11 @@ class EventStateStore:
             }
             if vectors is not None and turn_index < len(vectors):
                 self.turn_embeddings[key] = list(vectors[turn_index])
+        self.episode_turn_keys[episode.episode_id] = tuple(keys)
 
     def rebuild_turn_metadata(self) -> None:
         """Reconstruct index metadata for snapshots that predate turn search."""
+        self.episode_turn_keys = {}
         for episode in self.episodes.values():
             self._index_episode_turns(episode)
         self.rebuild_temporal_indexes()

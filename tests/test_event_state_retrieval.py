@@ -3,7 +3,13 @@ from types import SimpleNamespace
 
 from methods.event_state import retrieval as retrieval_module
 from methods.event_state.retrieval import EventStateRetriever, calibrate_scores
-from methods.event_state.context import episode_turn_embedding_text, select_claim_evidence, select_global_episode_evidence
+from methods.event_state.context import (
+    episode_turn_embedding_text,
+    select_claim_evidence,
+    select_global_episode_evidence,
+    select_joint_episode_evidence,
+    select_joint_episode_support_evidence,
+)
 from methods.event_state.schemas import Claim, Episode, EvidenceRef, TurnEvidence
 from methods.event_state.store import EventStateStore
 from methods.event_state.temporal import parse_temporal_query
@@ -240,6 +246,127 @@ def test_persisted_turn_vectors_preserve_evidence_selection_without_reembedding(
     assert actual == expected
     assert actual_global == expected_global
     assert embedder.document_batches == []
+
+
+def _query_local_source_store():
+    store = EventStateStore("sources")
+    for index, (source, similarity, turns) in enumerate((
+        ("A", .9, ("a1", "a2")), ("B", .5, ("b1",)), ("C", .1, ("c1",)),
+    )):
+        evidence = [TurnEvidence(turn_id, "User", "user", f"{source} evidence {turn_id}") for turn_id in turns]
+        vectors = [[similarity, (1 - similarity * similarity) ** .5] for _turn in evidence]
+        store.add_episode(
+            Episode(f"E{source}", "sources", source, index, None, None, [], None, "", source, evidence),
+            [similarity, (1 - similarity * similarity) ** .5], vectors,
+        )
+    store.add_claim(Claim("C", "User", "user", "fact", "value", evidence=[
+        EvidenceRef("EA", "A", ["a1", "a2"]), EvidenceRef("EA", "A", ["a2"]),
+        EvidenceRef("EB", "B", ["b1"]), EvidenceRef("EC", "C", ["c1"]),
+    ]), [1.0, 0.0])
+    return store
+
+
+def test_query_local_claim_sources_bound_sessions_and_preserve_full_provenance():
+    store = _query_local_source_store()
+    candidate = {"id": "C", "type": "state_claim", "final_score": 1.0}
+    all_sources = EventStateRetriever(
+        store, Embedder(), source_coherence_claim_source_mode="all_provenance",
+    )._query_support_info([candidate], [1.0, 0.0])["support_sources"][id(candidate)]
+    one_source = EventStateRetriever(
+        store, Embedder(), source_coherence_claim_source_mode="query_relevant",
+        source_coherence_claim_max_sources=1,
+    )._query_support_info([candidate], [1.0, 0.0])["support_sources"][id(candidate)]
+    two_sources = EventStateRetriever(
+        store, Embedder(), source_coherence_claim_source_mode="query_relevant",
+        source_coherence_claim_max_sources=2,
+    )._query_support_info([candidate], [1.0, 0.0])["support_sources"][id(candidate)]
+
+    assert EventStateRetriever(store, Embedder())._source_ids(candidate) == {"A", "B", "C"}
+    assert all_sources == {"A", "B", "C"}
+    assert one_source == {"A"}
+    assert two_sources == {"A", "B"}
+
+
+def test_query_local_claim_source_fallback_and_deterministic_ties():
+    store = _query_local_source_store()
+    candidate = {"id": "C", "type": "state_claim", "final_score": 1.0}
+    for key in store.episode_turn_keys["EA"]:
+        store.turn_embeddings.pop(key)
+    retriever = EventStateRetriever(store, Embedder(), source_coherence_claim_max_sources=2)
+    sources = retriever._query_support_info([candidate], [1.0, 0.0])["support_sources"][id(candidate)]
+    assert sources == {"B", "C"}
+
+    for key in store.episode_turn_keys["EB"] + store.episode_turn_keys["EC"]:
+        store.turn_embeddings[key] = [1.0, 0.0]
+    tied = retriever._query_support_info([candidate], [1.0, 0.0])["support_sources"][id(candidate)]
+    assert tied == {"B", "C"}
+
+    store.turn_embeddings.clear()
+    missing = retriever._query_support_info([candidate], [1.0, 0.0])["support_sources"][id(candidate)]
+    assert missing == {"A"}  # Deterministic origin-reference fallback.
+
+
+def test_source_coherent_mmr_uses_query_local_claim_sources_and_retains_competitive_sessions():
+    store = _query_local_source_store()
+    store.add_claim(Claim("C2", "User", "user", "other", "value", evidence=[EvidenceRef("EA", "A", ["a1"])]), [0.0, 1.0])
+    candidates = [
+        {"id": "C", "type": "state_claim", "final_score": .99},
+        {"id": "C2", "type": "state_claim", "final_score": .95},
+        {"id": "EB", "type": "episode", "final_score": .45},
+    ]
+    retriever = EventStateRetriever(
+        store, Embedder(), selector_mode="source_coherent_mmr", evidence_count=2,
+        source_coherence_claim_max_sources=1, source_coherence_max_sources=1,
+        source_coherence_bonus=.2, source_coherence_penalty=.1,
+    )
+    selected, diagnostics = retriever.select_candidates(candidates, query_vector=[1.0, 0.0])
+    assert [item["id"] for item in selected] == ["C", "C2"]
+    assert diagnostics["preferred_query_support_source_ids"] == ["A"]
+    assert diagnostics["selected_query_support_source_ids"] == ["A"]
+
+    competitive = EventStateRetriever(
+        store, Embedder(), selector_mode="source_coherent_mmr", evidence_count=2,
+        source_coherence_max_sources=2, source_coherence_score_ratio=.7,
+    )
+    both = competitive._preferred_sources({"A": 1.0, "B": .8})
+    assert both == {"A", "B"}
+
+
+def test_joint_episode_support_reservation_is_global_and_deduplicated():
+    episodes = []
+    for identifier, score in (("E1", .91), ("E2", .40), ("E3", .88), ("E4", .35), ("E5", .80)):
+        turn = TurnEvidence(f"{identifier}-turn", "User", "user", identifier)
+        episode = Episode(identifier, "ctx", identifier, 0, None, None, [], None, "", identifier, [turn])
+        episodes.append((0, episode, turn, score))
+    selected, candidate_count, deduplicated, keys = select_joint_episode_support_evidence(episodes, 3)
+    assert candidate_count == 5
+    assert deduplicated == 0
+    assert list(selected) == ["E1", "E3", "E5"]
+    assert keys == [("E1", "E1-turn"), ("E3", "E3-turn"), ("E5", "E5-turn")]
+
+    duplicate, count, deduplicated, keys = select_joint_episode_support_evidence(
+        episodes[:2], 3, {("E1", "E1-turn")},
+    )
+    assert count == 1
+    assert deduplicated == 1
+    assert list(duplicate) == ["E2"]
+    assert keys == [("E2", "E2-turn")]
+
+    # A smaller support pool leaves capacity for the ordinary global fill.
+    filled, details = select_joint_episode_evidence(
+        [(index, episode, ) for index, (_rank, episode, _turn, _score) in enumerate(episodes[:3])],
+        episodes[:1], [1.0, 0.0], Embedder(), 3,
+    )
+    assert details["support_reserved_count"] == 1
+    assert details["global_fill_count"] == 2
+    assert sum(len(turns) for turns in filled.values()) == 3
+
+    tied_rows = [
+        (rank, episode, turn, 1.0)
+        for rank, (_old_rank, episode, turn, _score) in enumerate(reversed(episodes[:3]))
+    ]
+    _selected, _count, _dedup, tied_keys = select_joint_episode_support_evidence(tied_rows, 3)
+    assert tied_keys == [("E1", "E1-turn"), ("E2", "E2-turn"), ("E3", "E3-turn")]
 
 
 def _episode(identifier, recorded_at, vector):

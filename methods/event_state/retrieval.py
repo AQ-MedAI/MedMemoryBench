@@ -272,10 +272,13 @@ class EventStateRetriever:
         extra: Dict[str, Any] | None = None,
         *,
         count: int | None = None,
+        query_vector: Sequence[float] | None = None,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        source_info = self._query_support_info(candidates, query_vector)
         selected = self._select(
             candidates,
             int(self.config.get("evidence_count", 8)) if count is None else max(0, int(count)),
+            source_info=source_info,
         )
         diagnostics = dict(extra or {})
         selected_claims = [self.store.claims[item["id"]] for item in selected if item["type"] == "state_claim"]
@@ -290,12 +293,13 @@ class EventStateRetriever:
             "selected_claim_count": sum(1 for item in selected if item["type"] == "state_claim"),
             "selected_episode_count": sum(1 for item in selected if item["type"] == "episode"),
         })
-        diagnostics.update(self.source_coherence_diagnostics(candidates, selected))
+        diagnostics.update(self.source_coherence_diagnostics(candidates, selected, source_info))
         return selected, diagnostics
 
     def retrieve(self, question: str, query_vector: Sequence[float] | None = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         candidates, extra = self.rank_candidates(question, query_vector=query_vector)
-        return self.select_candidates(candidates, extra)
+        vector = list(query_vector) if query_vector is not None else self.embedder.embed_query(question)
+        return self.select_candidates(candidates, extra, query_vector=vector)
 
     def rank_query_plan(
         self, question: str, plan: QueryPlan, query_vectors: Sequence[Sequence[float]] | None = None,
@@ -662,8 +666,8 @@ class EventStateRetriever:
         for episode_id, vector in self.store.episode_embeddings.items():
             summary_score = cosine(query_vector, vector)
             support_key, support_score = None, None
-            for key, metadata in self.store.turn_metadata.items():
-                if metadata.get("episode_id") != episode_id or key not in self.store.turn_embeddings:
+            for key in self.store.episode_turn_keys.get(episode_id, ()):
+                if key not in self.store.turn_embeddings:
                     continue
                 value = cosine(query_vector, self.store.turn_embeddings[key])
                 if support_score is None or value > support_score:
@@ -972,11 +976,27 @@ class EventStateRetriever:
                 candidates.append({"id": identifier, "type": record_type, "score": gamma * scores[identifier], "fusion_score": 0.0, "dense_score": 0.0, "ppr_score": scores[identifier], "base_score": 0.0, "final_score": gamma * scores[identifier]})
         return candidates
 
-    def _select(self, candidates: Sequence[Dict[str, Any]], count: int) -> List[Dict[str, Any]]:
+    def _select(
+        self,
+        candidates: Sequence[Dict[str, Any]],
+        count: int,
+        *,
+        source_info: Dict[str, Any] | None = None,
+    ) -> List[Dict[str, Any]]:
         with get_usage_tracker().scope("event_state.selector"):
-            return self._select_impl(candidates, count)
+            # Preserve the private selector call contract used by legacy
+            # regression oracles when source-coherent attribution is inactive.
+            if self.config.get("selector_mode", "state_mmr") != "source_coherent_mmr":
+                return self._select_impl(candidates, count)
+            return self._select_impl(candidates, count, source_info=source_info)
 
-    def _select_impl(self, candidates: Sequence[Dict[str, Any]], count: int) -> List[Dict[str, Any]]:
+    def _select_impl(
+        self,
+        candidates: Sequence[Dict[str, Any]],
+        count: int,
+        *,
+        source_info: Dict[str, Any] | None = None,
+    ) -> List[Dict[str, Any]]:
         mode, selected = self.config.get("selector_mode", "state_mmr"), []
         remaining = list(candidates)
         if remaining and all(item.get("_planner_merged_final_score") for item in remaining):
@@ -1012,36 +1032,30 @@ class EventStateRetriever:
         def source_ids(item: Dict[str, Any]) -> set[Any]:
             key = id(item)
             if key not in source_ids_cache:
-                source_ids_cache[key] = self._source_ids(item)
+                # State MMR deliberately keeps its historical full-provenance
+                # source-diversity behavior. Query-local attribution belongs
+                # exclusively to source-coherent selection.
+                source_ids_cache[key] = set(
+                    (source_info or {}).get("support_sources", {}).get(key, self._source_ids(item))
+                    if mode == "source_coherent_mmr" else self._source_ids(item)
+                )
             return source_ids_cache[key]
 
         source_scores: Dict[Any, float] = {}
         preferred_sources: set[Any] = set()
         if mode == "source_coherent_mmr":
-            grouped: Dict[Any, List[float]] = defaultdict(list)
-            for item in remaining:
-                for source in source_ids(item):
-                    if source is not None:
-                        grouped[source].append(relevance_by_id[item["id"]])
-            additional = max(0, int(self.config.get("source_coherence_additional_candidates", 2)))
-            for source, scores in grouped.items():
-                ranked = sorted(scores, reverse=True)
-                source_scores[source] = ranked[0] + sum(ranked[1:additional + 1]) * float(self.config.get("source_coherence_additional_weight", .35))
-            ordered_sources = sorted(source_scores, key=lambda source: (-source_scores[source], str(source)))
-            if ordered_sources:
-                preferred_sources.add(ordered_sources[0])
-                best = source_scores[ordered_sources[0]]
-                max_sources = self.config.get("source_coherence_max_sources", None)
-                max_sources = len(ordered_sources) if max_sources is None else max(1, int(max_sources))
-                mass = max(0.0, min(1.0, float(self.config.get("source_coherence_score_mass", .85))))
-                ratio = max(0.0, float(self.config.get("source_coherence_score_ratio", .7)))
-                accumulated = source_scores[ordered_sources[0]]
-                total = sum(source_scores.values()) or 1.0
-                for source in ordered_sources[1:max_sources]:
-                    if source_scores[source] < best * ratio and accumulated / total >= mass:
-                        continue
-                    preferred_sources.add(source)
-                    accumulated += source_scores[source]
+            source_scores = dict((source_info or {}).get("source_scores", {}))
+            if not source_scores:
+                grouped: Dict[Any, List[float]] = defaultdict(list)
+                for item in remaining:
+                    for source in source_ids(item):
+                        if source is not None:
+                            grouped[source].append(relevance_by_id[item["id"]])
+                additional = max(0, int(self.config.get("source_coherence_additional_candidates", 2)))
+                for source, scores in grouped.items():
+                    ranked = sorted(scores, reverse=True)
+                    source_scores[source] = ranked[0] + sum(ranked[1:additional + 1]) * float(self.config.get("source_coherence_additional_weight", .35))
+            preferred_sources = set((source_info or {}).get("preferred_sources", self._preferred_sources(source_scores)))
 
         while remaining and len(selected) < count:
             # Preserve the established semantic/episode evidence path when it
@@ -1054,13 +1068,25 @@ class EventStateRetriever:
             else:
                 weight = float(self.config.get("mmr_lambda", .7))
 
-                if mode == "state_mmr" and selected and related_ids is None:
+                use_state_relation = mode == "state_mmr" or (
+                    mode == "source_coherent_mmr"
+                    and self.config.get("source_coherent_use_state_relation_bonus", True)
+                )
+                use_representation_balance = mode == "state_mmr" or (
+                    mode == "source_coherent_mmr"
+                    and self.config.get("source_coherent_use_representation_balance_bonus", True)
+                )
+                use_source_diversity = mode == "state_mmr" or (
+                    mode == "source_coherent_mmr"
+                    and self.config.get("source_coherent_use_source_diversity_bonus", False)
+                )
+                if use_state_relation and selected and related_ids is None:
                     related_ids = {}
                     for edge in self.store.edges:
                         source_id, target_id = edge["source_id"], edge["target_id"]
                         related_ids.setdefault(source_id, set()).add(target_id)
                         related_ids.setdefault(target_id, set()).add(source_id)
-                if mode == "state_mmr" and selected and not selected_sources_ready:
+                if use_source_diversity and selected and not selected_sources_ready:
                     for prior in selected:
                         selected_source_ids.update(source_ids(prior))
                     selected_sources_ready = True
@@ -1068,12 +1094,12 @@ class EventStateRetriever:
                 def score(item: Dict[str, Any]) -> float:
                     redundancy = max((similarity(item, other) for other in selected), default=0.0)
                     value = weight * relevance_by_id[item["id"]] - (1 - weight) * redundancy
-                    if mode == "state_mmr" and selected:
-                        if related_ids and related_ids.get(item["id"], set()) & selected_ids:
+                    if selected:
+                        if use_state_relation and related_ids and related_ids.get(item["id"], set()) & selected_ids:
                             value += float(self.config.get("state_relation_bonus", .05))
-                        if item["type"] != selected[-1]["type"]:
+                        if use_representation_balance and item["type"] != selected[-1]["type"]:
                             value += float(self.config.get("representation_balance_bonus", .02))
-                        if source_ids(item) - selected_source_ids:
+                        if use_source_diversity and source_ids(item) - selected_source_ids:
                             value += float(self.config.get("source_diversity_bonus", .02))
                     if mode == "source_coherent_mmr":
                         sources = source_ids(item)
@@ -1092,27 +1118,59 @@ class EventStateRetriever:
             selected.append(choice)
             remaining.remove(choice)
             selected_ids.add(choice["id"])
-            if mode == "state_mmr" and selected_sources_ready:
+            if (mode == "state_mmr" or self.config.get("source_coherent_use_source_diversity_bonus", False)) and selected_sources_ready:
                 selected_source_ids.update(source_ids(choice))
         for rank, item in enumerate(selected, 1):
             item["selected_rank"] = rank
         return selected
 
-    def source_coherence_diagnostics(self, candidates: Sequence[Dict[str, Any]], selected: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    def source_coherence_diagnostics(
+        self,
+        candidates: Sequence[Dict[str, Any]],
+        selected: Sequence[Dict[str, Any]],
+        source_info: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
         """Return bounded source provenance diagnostics for final selection."""
+        source_info = source_info or self._query_support_info(candidates, None)
+        support_by_item = source_info.get("support_sources", {})
         sources = set()
+        query_sources = set()
         for item in candidates:
             sources.update(source for source in self._source_ids(item) if source is not None)
+            query_sources.update(source for source in support_by_item.get(id(item), self._source_ids(item)) if source is not None)
         selected_sources = set()
+        selected_query_sources = set()
         for item in selected:
             selected_sources.update(source for source in self._source_ids(item) if source is not None)
+            selected_query_sources.update(source for source in support_by_item.get(id(item), self._source_ids(item)) if source is not None)
         scores: Dict[str, float] = {}
         for item in candidates:
-            for source in self._source_ids(item):
+            for source in support_by_item.get(id(item), self._source_ids(item)):
                 if source is not None:
                     scores[str(source)] = max(scores.get(str(source), 0.0), float(item.get("final_score", item.get("score", 0.0))))
+        preferred = set(source_info.get("preferred_sources", set()))
+        preferred_selected = sum(bool(support_by_item.get(id(item), self._source_ids(item)) & preferred) for item in selected)
+        nonpreferred_selected = sum(
+            bool(support_by_item.get(id(item), self._source_ids(item)))
+            and not bool(support_by_item.get(id(item), self._source_ids(item)) & preferred)
+            for item in selected
+        )
         return {
             "source_coherence_mode": self.config.get("selector_mode", "state_mmr"),
+            "candidate_full_provenance_source_count": len(sources),
+            "selected_full_provenance_source_count": len(selected_sources),
+            "candidate_query_support_source_count": len(query_sources),
+            "selected_query_support_source_count": len(selected_query_sources),
+            "selected_query_support_source_ids": sorted(str(source) for source in selected_query_sources)[:32],
+            "preferred_query_support_source_ids": sorted(str(source) for source in preferred)[:32],
+            "top_query_support_source_scores": [
+                {"source_session_id": source, "score": score}
+                for source, score in sorted(scores.items(), key=lambda item: (-item[1], item[0]))[:16]
+            ],
+            "claims_using_query_local_source_attribution": source_info.get("query_local_claim_count", 0),
+            "claims_falling_back_to_full_provenance": source_info.get("full_provenance_fallback_count", 0),
+            "source_coherence_preferred_selected_count": preferred_selected,
+            "source_coherence_nonpreferred_selected_count": nonpreferred_selected,
             "candidate_source_session_count": len(sources),
             "selected_source_session_count": len(selected_sources),
             "selected_source_session_ids": sorted(str(source) for source in selected_sources)[:32],
@@ -1120,8 +1178,107 @@ class EventStateRetriever:
                 {"source_session_id": source, "score": score}
                 for source, score in sorted(scores.items(), key=lambda item: (-item[1], item[0]))[:16]
             ],
-            "source_coherence_filter_count": 0,
+            "source_coherence_filter_count": nonpreferred_selected,
         }
+
+    def _query_support_info(
+        self, candidates: Sequence[Dict[str, Any]], query_vector: Sequence[float] | None,
+    ) -> Dict[str, Any]:
+        """Resolve query-local claim support without changing canonical provenance."""
+        support_sources: Dict[int, set[Any]] = {}
+        query_local_claim_count = full_provenance_fallback_count = 0
+        similarity_cache: Dict[str, float] = {}
+        mode = self.config.get("source_coherence_claim_source_mode", "query_relevant")
+        max_sources = max(1, int(self.config.get("source_coherence_claim_max_sources", 2)))
+        for item in candidates:
+            if item["type"] != "state_claim" or mode == "all_provenance":
+                support_sources[id(item)] = self._source_ids(item)
+                continue
+            claim = self.store.claims.get(item["id"])
+            if claim is None or query_vector is None:
+                support_sources[id(item)] = self._source_ids(item)
+                full_provenance_fallback_count += int(claim is not None)
+                continue
+            source_scores: Dict[Any, float] = {}
+            fallback_refs = []
+            for ref_index, ref in enumerate(claim.evidence):
+                episode = self.store.episodes.get(ref.episode_id)
+                if episode is None:
+                    continue
+                ref_keys = [
+                    key for key in self.store.episode_turn_keys.get(episode.episode_id, ())
+                    if not ref.source_turn_ids
+                    or self.store.turn_metadata.get(key, {}).get("source_turn_id") in ref.source_turn_ids
+                ]
+                fallback_refs.append((0 if ref.support_type == "origin" else 1, ref_index, str(ref.source_session_id), ref.source_session_id))
+                values = []
+                for key in ref_keys:
+                    vector = self.store.turn_embeddings.get(key)
+                    if not vector:
+                        continue
+                    if key not in similarity_cache:
+                        similarity_cache[key] = cosine(query_vector, vector)
+                    values.append(similarity_cache[key])
+                if values and ref.source_session_id is not None:
+                    source_scores[ref.source_session_id] = max(source_scores.get(ref.source_session_id, -math.inf), max(values))
+            if source_scores:
+                support_sources[id(item)] = {
+                    source for source, _score in sorted(source_scores.items(), key=lambda row: (-row[1], str(row[0])))[:max_sources]
+                }
+                query_local_claim_count += 1
+            elif fallback_refs:
+                fallback_refs.sort()
+                support_sources[id(item)] = {fallback_refs[0][3]} if fallback_refs[0][3] is not None else self._source_ids(item)
+            else:
+                support_sources[id(item)] = self._source_ids(item)
+                full_provenance_fallback_count += 1
+
+        source_scores: Dict[Any, float] = {}
+        if self.config.get("selector_mode", "state_mmr") == "source_coherent_mmr":
+            grouped: Dict[Any, List[float]] = defaultdict(list)
+            relevance = (
+                [float(item["final_score"]) for item in candidates]
+                if candidates and all(item.get("_planner_merged_final_score") for item in candidates)
+                else normalize_scores([float(item.get("final_score", item.get("score", 0.0))) for item in candidates])
+            )
+            for item, value in zip(candidates, relevance):
+                for source in support_sources.get(id(item), set()):
+                    if source is not None:
+                        grouped[source].append(value)
+            additional = max(0, int(self.config.get("source_coherence_additional_candidates", 2)))
+            for source, values in grouped.items():
+                ranked = sorted(values, reverse=True)
+                source_scores[source] = ranked[0] + sum(ranked[1:additional + 1]) * float(self.config.get("source_coherence_additional_weight", .35))
+        preferred_sources = self._preferred_sources(source_scores)
+        return {
+            "support_sources": support_sources,
+            "source_scores": source_scores,
+            "preferred_sources": preferred_sources,
+            "query_local_claim_count": query_local_claim_count,
+            "full_provenance_fallback_count": full_provenance_fallback_count,
+        }
+
+    def _preferred_sources(self, source_scores: Dict[Any, float]) -> set[Any]:
+        """Choose competitive sources until the configured relevance mass is covered."""
+        ordered = sorted(source_scores, key=lambda source: (-source_scores[source], str(source)))
+        if not ordered:
+            return set()
+        maximum = self.config.get("source_coherence_max_sources", None)
+        limit = len(ordered) if maximum is None else max(1, int(maximum))
+        preferred = {ordered[0]}
+        best = source_scores[ordered[0]]
+        total = sum(source_scores.values()) or 1.0
+        accumulated = best
+        ratio = max(0.0, float(self.config.get("source_coherence_score_ratio", .7)))
+        mass = max(0.0, min(1.0, float(self.config.get("source_coherence_score_mass", .85))))
+        for source in ordered[1:limit]:
+            competitive = source_scores[source] >= best * ratio
+            needs_mass = accumulated / total < mass
+            if not competitive and not needs_mass:
+                continue
+            preferred.add(source)
+            accumulated += source_scores[source]
+        return preferred
 
     def _vector(self, identifier: str, record_type: str) -> Sequence[float]:
         if record_type == "state_claim":
