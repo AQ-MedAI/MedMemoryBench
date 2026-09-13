@@ -2,7 +2,7 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 from methods.event_state import retrieval as retrieval_module
-from methods.event_state.retrieval import EventStateRetriever
+from methods.event_state.retrieval import EventStateRetriever, calibrate_scores
 from methods.event_state.context import episode_turn_embedding_text, select_claim_evidence, select_global_episode_evidence
 from methods.event_state.schemas import Claim, Episode, EvidenceRef, TurnEvidence
 from methods.event_state.store import EventStateStore
@@ -32,6 +32,23 @@ class CountingEmbedder(DeterministicEmbedder):
     def embed_documents(self, texts):
         self.document_batches.append(list(texts))
         return super().embed_documents(texts)
+
+
+def test_score_calibration_is_deterministic_for_equal_negative_and_single_values():
+    assert calibrate_scores([], "minmax") == []
+    assert calibrate_scores([-.2], "minmax") == [1.0]
+    assert calibrate_scores([-.2, -.2], "sigmoid_zscore") == [.5, .5]
+    assert calibrate_scores([.55, .9], "minmax") == [0.0, 1.0]
+
+
+def test_weighted_score_fusion_retains_dense_magnitude_and_rrf_remains_available():
+    store = EventStateStore("fusion")
+    retriever = EventStateRetriever(store, Embedder(), fusion_mode="weighted_score", score_calibration_mode="minmax")
+    rows = retriever._fuse([("A", .9)], [("B", .55)], (), (), (), ())
+    assert {row["id"]: row["dense_raw_score"] for row in rows} == {"A": .9, "B": .55}
+    assert {row["id"]: row["dense_calibrated_score"] for row in rows} == {"A": 1.0, "B": 0.0}
+    legacy = EventStateRetriever(store, Embedder(), fusion_mode="rrf")._fuse([("A", .9)], [("B", .55)], (), (), (), ())
+    assert all("dense_raw_score" not in row for row in legacy)
 
 
 def _original_select(retriever, candidates, count):

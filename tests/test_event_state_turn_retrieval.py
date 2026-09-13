@@ -45,6 +45,34 @@ class ClaimedNeedleLLM:
         return SimpleNamespace(content='{"operation":"NEW","confidence":1}')
 
 
+def test_bm25_sentence_chunks_return_immutable_parent_turn_and_cache_once():
+    store = EventStateStore("bm25")
+    long_turn = TurnEvidence("long", "A", "user", "common " * 80 + "rareneedle detail.")
+    short_turn = TurnEvidence("short", "A", "user", "common common common")
+    episode = Episode("E", "bm25", "session", 0, None, None, ["A"], "primary_user", "", "summary", [long_turn, short_turn])
+    store.add_episode(episode, [0.0, 1.0], [[0.0, 1.0], [0.0, 1.0]])
+    retriever = EventStateRetriever(store, KeywordEmbedder(), turn_lexical_mode="bm25", turn_sparse_unit="sentence_chunk", turn_top_k=2)
+    first = retriever._lexical_turn_rank("rareneedle")
+    cache = next(iter(store._turn_bm25_caches.values()))
+    second = retriever._lexical_turn_rank("rareneedle")
+    assert first == second == [(store.turn_key("E", 0), first[0][1])]
+    assert next(iter(store._turn_bm25_caches.values())) is cache
+
+
+def test_source_coherent_selector_keeps_dominant_session_without_hard_filter():
+    agent, store, keys = _selection_fixture(("a", "b", "c"))
+    store.turn_metadata[keys["b"]]["source_session_id"] = "session-a"
+    retriever = EventStateRetriever(store, KeywordEmbedder(), selector_mode="source_coherent_mmr", evidence_count=2,
+                                    source_coherence_score_ratio=.7, source_coherence_bonus=.2)
+    candidates = [
+        {"id": keys["a"], "type": "turn", "final_score": .99},
+        {"id": keys["b"], "type": "turn", "final_score": .95},
+        {"id": keys["c"], "type": "turn", "final_score": .2},
+    ]
+    selected = retriever._select(candidates, 2)
+    assert [item["id"] for item in selected] == [keys["a"], keys["b"]]
+
+
 def _selection_fixture(turn_ids=("x", "y", "z", "w")):
     agent = EventStateAgent(
         llm_client=EmptyExtractionLLM(), memory_llm_client=EmptyExtractionLLM(),

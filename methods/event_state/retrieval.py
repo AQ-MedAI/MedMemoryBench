@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict, deque
 from copy import deepcopy
+import math
 import re
+import threading
+import time
 from datetime import date
 from typing import Any, Dict, List, Sequence, Tuple
 
@@ -23,6 +26,8 @@ from utils.llm_client import get_usage_tracker
 
 # Keep the historical module-level hook patchable for compatibility tests.
 parse_temporal_query = parse_temporal_query_fn
+_LOCAL_RERANKERS: Dict[str, Any] = {}
+_LOCAL_RERANKER_LOCK = threading.Lock()
 
 
 def dense_rank(query: Sequence[float], vectors: Dict[str, Sequence[float]], top_k: int) -> List[Tuple[str, float]]:
@@ -37,6 +42,38 @@ def normalize_scores(values: Sequence[float]) -> List[float]:
     if high <= low:
         return [1.0] * len(values)
     return [(value - low) / (high - low) for value in values]
+
+
+def calibrate_scores(values: Sequence[float], mode: str) -> List[float]:
+    """Calibrate one query-local representation list without NaNs."""
+    if not values:
+        return []
+    if mode == "none":
+        return [float(value) for value in values]
+    if mode == "minmax":
+        return normalize_scores(values)
+    median = sorted(values)[len(values) // 2]
+    deviations = sorted(abs(value - median) for value in values)
+    scale = deviations[len(deviations) // 2] * 1.4826
+    if scale <= 1e-12:
+        return [0.5] * len(values)
+    return [1.0 / (1.0 + math.exp(-max(-30.0, min(30.0, (value - median) / scale)))) for value in values]
+
+
+def available_memory_mb() -> float | None:
+    try:
+        import psutil  # type: ignore
+        return float(psutil.virtual_memory().available) / (1024 * 1024)
+    except Exception:
+        pass
+    try:
+        with open("/proc/meminfo", "r", encoding="ascii") as handle:
+            for line in handle:
+                if line.startswith("MemAvailable:"):
+                    return float(line.split()[1]) / 1024.0
+    except Exception:
+        pass
+    return None
 
 
 class EventStateRetriever:
@@ -64,17 +101,26 @@ class EventStateRetriever:
         retrieve_turns = self.config.get("retrieve_turns", True) if retrieve_turns_override is None else retrieve_turns_override
         claim_vectors, hidden_prior_state_count = self._visible_claim_vectors(temporal, state_view)
         claim_rank = dense_rank(query_vector, claim_vectors, self.config.get("claim_top_k", 30)) if retrieve_claims else []
-        episode_rank = dense_rank(query_vector, self.store.episode_embeddings, self.config.get("episode_top_k", 20)) if retrieve_episodes else []
+        episode_rank = self._episode_rank(query_vector) if retrieve_episodes else []
         turn_rank = dense_rank(query_vector, self.store.turn_embeddings, self.config.get("turn_top_k", 8)) if retrieve_turns else []
         lexical_turn_rank = self._lexical_turn_rank(question) if retrieve_turns and self.config.get("turn_lexical_retrieval_enabled", False) else []
         temporal_claim_rank, temporal_episode_rank = [], []
-        if temporal is not None:
+        if temporal is not None and self.config.get("temporal_query_mode", "legacy") == "legacy":
             temporal_claim_rank = self._temporal_claim_rank(query_vector, temporal, state_view) if retrieve_claims else []
             temporal_episode_rank = self._temporal_episode_rank(query_vector, temporal) if retrieve_episodes else []
-        candidates = self._rrf(
+        candidates = self._fuse(
             claim_rank, episode_rank, turn_rank, lexical_turn_rank,
             temporal_claim_rank, temporal_episode_rank,
         )
+        for item in candidates:
+            if item["type"] == "episode" and hasattr(self, "_episode_support") and item["id"] in self._episode_support:
+                turn_key, support_score, summary_score = self._episode_support[item["id"]]
+                item["episode_support_turn_id"] = turn_key
+                item["episode_support_turn_score"] = support_score
+                item["episode_summary_score"] = summary_score
+        if temporal is not None and self.config.get("temporal_query_mode", "legacy") == "dual_axis_semantic":
+            candidates = self._dual_axis_temporal(candidates, temporal)
+        candidates = self._rerank_local(question, candidates)
         if self.config.get("ppr_enabled", False):
             graph_candidates = [item for item in candidates if item["type"] != "turn"]
             turn_candidates = [item for item in candidates if item["type"] == "turn"]
@@ -133,6 +179,16 @@ class EventStateRetriever:
             "temporal_future_state_filtered_count": future_filtered,
             "selected_temporal_claim_count": 0,
             "selected_temporal_episode_count": 0,
+            "fusion_mode": self.config.get("fusion_mode", "rrf"),
+            "score_calibration_mode": self.config.get("score_calibration_mode", "minmax"),
+            "turn_lexical_mode": self.config.get("turn_lexical_mode", "overlap"),
+            "turn_sparse_unit": self.config.get("turn_sparse_unit", "turn"),
+            "bm25_cache_built": bool(getattr(self.store, "_turn_bm25_caches", {})),
+            "episode_relevance_mode": self.config.get("episode_relevance_mode", "summary"),
+            "temporal_query_mode": self.config.get("temporal_query_mode", "legacy"),
+            "local_reranker_mode": self.config.get("local_reranker_mode", "off"),
+            "local_reranker_disabled_reason": getattr(self, "_reranker_disabled_reason", None),
+            "bm25_index_seconds": getattr(self, "_last_bm25_build_seconds", 0.0),
         }
 
     def rank_candidate_pools(
@@ -234,6 +290,7 @@ class EventStateRetriever:
             "selected_claim_count": sum(1 for item in selected if item["type"] == "state_claim"),
             "selected_episode_count": sum(1 for item in selected if item["type"] == "episode"),
         })
+        diagnostics.update(self.source_coherence_diagnostics(candidates, selected))
         return selected, diagnostics
 
     def retrieve(self, question: str, query_vector: Sequence[float] | None = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
@@ -591,6 +648,42 @@ class EventStateRetriever:
         rows.sort(key=lambda item: (-item[1], self.store.claims[item[0]].recorded_at or "", item[0]))
         return rows[: max(0, int(self.config.get("claim_top_k", 30)))]
 
+    def _episode_rank(self, query_vector: Sequence[float]) -> List[Tuple[str, float]]:
+        """Rank summaries, optionally blending a supporting immutable turn."""
+        mode = self.config.get("episode_relevance_mode", "summary")
+        if mode == "summary":
+            return dense_rank(query_vector, self.store.episode_embeddings, self.config.get("episode_top_k", 20))
+        summary_weight = float(self.config.get("episode_summary_weight", 0.5))
+        turn_weight = float(self.config.get("episode_best_turn_weight", 0.5))
+        normalizer = summary_weight + turn_weight
+        if normalizer <= 0:
+            summary_weight, turn_weight, normalizer = 1.0, 0.0, 1.0
+        rows = []
+        for episode_id, vector in self.store.episode_embeddings.items():
+            summary_score = cosine(query_vector, vector)
+            support_key, support_score = None, None
+            for key, metadata in self.store.turn_metadata.items():
+                if metadata.get("episode_id") != episode_id or key not in self.store.turn_embeddings:
+                    continue
+                value = cosine(query_vector, self.store.turn_embeddings[key])
+                if support_score is None or value > support_score:
+                    support_key, support_score = key, value
+            support_score = support_score if support_score is not None else summary_score
+            rows.append((episode_id, (summary_weight * summary_score + turn_weight * support_score) / normalizer, summary_score, support_key, support_score))
+        rows.sort(key=lambda row: (-row[1], row[0]))
+        self._episode_support = {identifier: (key, score, summary) for identifier, _value, summary, key, score in rows}
+        return [(identifier, score) for identifier, score, _summary, _key, _support in rows[:max(0, int(self.config.get("episode_top_k", 20)))]]
+
+    def _fuse(
+        self,
+        claims: Sequence[Tuple[str, float]], episodes: Sequence[Tuple[str, float]],
+        turns: Sequence[Tuple[str, float]] = (), lexical_turns: Sequence[Tuple[str, float]] = (),
+        temporal_claims: Sequence[Tuple[str, float, str]] = (), temporal_episodes: Sequence[Tuple[str, float, str]] = (),
+    ) -> List[Dict[str, Any]]:
+        if self.config.get("fusion_mode", "rrf") == "rrf":
+            return self._rrf(claims, episodes, turns, lexical_turns, temporal_claims, temporal_episodes)
+        return self._score_fusion(claims, episodes, turns, lexical_turns, temporal_claims, temporal_episodes)
+
     def _rrf(
         self,
         claims: Sequence[Tuple[str, float]],
@@ -625,8 +718,58 @@ class EventStateRetriever:
                 item["temporal_match_type"] = item.get("temporal_match_type") or match_type
         return list(values.values())
 
+    def _score_fusion(
+        self,
+        claims: Sequence[Tuple[str, float]], episodes: Sequence[Tuple[str, float]],
+        turns: Sequence[Tuple[str, float]] = (), lexical_turns: Sequence[Tuple[str, float]] = (),
+        temporal_claims: Sequence[Tuple[str, float, str]] = (), temporal_episodes: Sequence[Tuple[str, float, str]] = (),
+    ) -> List[Dict[str, Any]]:
+        values: Dict[str, Dict[str, Any]] = {}
+        calibration = self.config.get("score_calibration_mode", "minmax")
+        channels = (
+            ("state_claim", claims, float(self.config.get("claim_retrieval_weight", 1.0)), "dense"),
+            ("episode", episodes, float(self.config.get("episode_retrieval_weight", 1.0)), "dense"),
+            ("turn", turns, float(self.config.get("turn_retrieval_weight", 1.0)), "dense"),
+            ("turn", lexical_turns, float(self.config.get("turn_lexical_retrieval_weight", 1.0)), "sparse"),
+        )
+        # Cosine scores share a representation scale across claims, episodes,
+        # and immutable turns, so calibrate their pooled values.  This retains
+        # magnitude differences even when two separate lists both have rank 1.
+        dense_calibrated = iter(calibrate_scores(
+            [float(score) for _type, rows, _weight, channel in channels if channel == "dense" for _identifier, score in rows], calibration,
+        ))
+        for record_type, rows, weight, channel in channels:
+            if channel == "dense":
+                calibrated = [next(dense_calibrated) for _identifier, _score in rows]
+            else:
+                calibrated = calibrate_scores([float(score) for _identifier, score in rows], calibration)
+            for (identifier, raw), score in zip(rows, calibrated):
+                item = values.setdefault(identifier, {"id": identifier, "type": record_type, "score": 0.0,
+                    "dense_raw_score": None, "dense_calibrated_score": None, "sparse_raw_score": None,
+                    "sparse_calibrated_score": None, "temporal_score": 0.0, "ppr_score": 0.0})
+                raw_key, calibrated_key = ("dense_raw_score", "dense_calibrated_score") if channel == "dense" else ("sparse_raw_score", "sparse_calibrated_score")
+                item[raw_key] = max(float(raw), item[raw_key]) if item[raw_key] is not None else float(raw)
+                item[calibrated_key] = max(float(score), item[calibrated_key]) if item[calibrated_key] is not None else float(score)
+                item["score"] += weight * float(score)
+        temporal_weight = float(self.config.get("temporal_retrieval_weight", 1.0))
+        for record_type, rows in (("state_claim", temporal_claims), ("episode", temporal_episodes)):
+            for identifier, raw, match_type in rows:
+                item = values.setdefault(identifier, {"id": identifier, "type": record_type, "score": 0.0,
+                    "dense_raw_score": None, "dense_calibrated_score": None, "sparse_raw_score": None,
+                    "sparse_calibrated_score": None, "temporal_score": 0.0, "ppr_score": 0.0})
+                temporal = .5 if match_type == "as_of_fallback" else 1.0
+                item["temporal_score"] = max(item["temporal_score"], temporal)
+                item["score"] += temporal_weight * temporal
+        for item in values.values():
+            item["fusion_score"] = item["score"]
+            item["fused_score"] = item["score"]
+            item["dense_score"] = item["dense_raw_score"] if item["dense_raw_score"] is not None else 0.0
+        return list(values.values())
+
     def _lexical_turn_rank(self, question: str) -> List[Tuple[str, float]]:
         """Return dependency-free literal-term rankings for archived turns."""
+        if self.config.get("turn_lexical_mode", "overlap") == "bm25":
+            return self._bm25_turn_rank(question)
         query_tokens = set(re.findall(r"[a-z0-9]+", question.casefold()))
         if not query_tokens:
             return []
@@ -641,6 +784,135 @@ class EventStateRetriever:
                 rows.append((key, overlap / len(query_tokens)))
         rows.sort(key=lambda item: (-item[1], item[0]))
         return rows[:max(0, int(self.config.get("turn_top_k", 8)))]
+
+    def _bm25_turn_rank(self, question: str) -> List[Tuple[str, float]]:
+        query_tokens = re.findall(r"[a-z0-9]+", question.casefold())
+        if not query_tokens:
+            return []
+        started = time.perf_counter()
+        cache = self.store.turn_bm25_cache(
+            unit=self.config.get("turn_sparse_unit", "turn"),
+            min_chars=int(self.config.get("turn_chunk_min_chars", 24)),
+            max_chunks_per_turn=int(self.config.get("turn_chunk_max_per_turn", 8)),
+        )
+        k1, b = float(self.config.get("bm25_k1", 1.2)), float(self.config.get("bm25_b", .75))
+        corpus_size, average = len(cache["documents"]), cache["average_length"] or 1.0
+        scores: Dict[str, float] = {}
+        for parent, _chunk_index, tokens in cache["documents"]:
+            counts = Counter(tokens)
+            score = 0.0
+            for token in query_tokens:
+                frequency = counts.get(token, 0)
+                if not frequency:
+                    continue
+                df = cache["document_frequency"].get(token, 0)
+                idf = math.log(1.0 + (corpus_size - df + .5) / (df + .5))
+                score += idf * frequency * (k1 + 1.0) / (frequency + k1 * (1.0 - b + b * len(tokens) / average))
+            if score:
+                # Chunks resolve to their immutable parent; max avoids a long
+                # turn winning merely because it contains many matching chunks.
+                scores[parent] = max(scores.get(parent, 0.0), score)
+        self._last_bm25_build_seconds = time.perf_counter() - started
+        return sorted(scores.items(), key=lambda item: (-item[1], item[0]))[:max(0, int(self.config.get("turn_top_k", 8)))]
+
+    def _candidate_event_compatibility(self, item: Dict[str, Any], temporal: TemporalQueryConstraint) -> float:
+        if item["type"] == "state_claim":
+            claim = self.store.claims.get(item["id"])
+            spans = ([{"start": claim.event_time_start, "end": claim.event_time_end}]
+                     if claim and claim.event_time_start and claim.event_time_end else [])
+        elif item["type"] == "episode":
+            spans = self.store.episode_temporal_spans.get(item["id"], [])
+        else:
+            episode, turn = self.store.turn_for_key(item["id"])
+            spans = self.store.turn_temporal_spans.get((episode.episode_id, turn.turn_id), []) if episode and turn else []
+        target = temporal.target_date
+        for span in spans:
+            start, end = parse_stored_date(span.get("start")), parse_stored_date(span.get("end"))
+            if not start or not end:
+                continue
+            if ((temporal.kind == "exact_record_time" and target is not None and start <= target <= end)
+                    or (temporal.kind == "interval" and temporal.start_date and temporal.end_date and start <= temporal.end_date and end >= temporal.start_date)
+                    or (temporal.kind == "before" and target is not None and end < target)
+                    or (temporal.kind == "after" and target is not None and start > target)):
+                return 1.0
+        return 0.0
+
+    def _candidate_record_compatibility(self, item: Dict[str, Any], temporal: TemporalQueryConstraint) -> float:
+        if item["type"] == "episode":
+            return float(episode_temporal_match(self.store.episodes[item["id"]], temporal) is not None)
+        if item["type"] == "turn":
+            episode, _turn = self.store.turn_for_key(item["id"])
+            return float(episode is not None and episode_temporal_match(episode, temporal) is not None)
+        claim = self.store.claims.get(item["id"])
+        return float(claim is not None and claim_temporal_match(claim, self.store.episodes, temporal) is not None)
+
+    def _dual_axis_temporal(self, candidates: List[Dict[str, Any]], temporal: TemporalQueryConstraint) -> List[Dict[str, Any]]:
+        """Rerank the semantic pool only; dates never create new candidates."""
+        weight = float(self.config.get("temporal_retrieval_weight", 1.0))
+        for item in candidates:
+            event = self._candidate_event_compatibility(item, temporal)
+            record = self._candidate_record_compatibility(item, temporal)
+            compatibility = min(1.0, max(event, record) + (.25 if event and record else 0.0))
+            semantic = max(0.0, float(item.get("score", 0.0)))
+            item["semantic_score"] = semantic
+            item["event_time_compatibility"] = event
+            item["record_time_compatibility"] = record
+            item["temporal_score"] = compatibility
+            item["joint_score"] = semantic * (1.0 + weight * compatibility)
+            item["score"] = item["joint_score"]
+            item["fusion_score"] = item.get("fusion_score", semantic)
+        return candidates
+
+    def _candidate_text(self, item: Dict[str, Any]) -> str:
+        if item["type"] == "state_claim":
+            claim = self.store.claims[item["id"]]
+            return f"{claim.subject} {claim.predicate} {claim.value} {claim.qualifiers}"
+        if item["type"] == "episode":
+            return self.store.episodes[item["id"]].summary
+        _episode, turn = self.store.turn_for_key(item["id"])
+        return f"{turn.speaker} {turn.text} {turn.image_caption or ''}" if turn else ""
+
+    def _rerank_local(self, question: str, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if self.config.get("local_reranker_mode", "off") != "cross_encoder" or not candidates:
+            return candidates
+        available = self.config.get("local_reranker_available_memory_mb", available_memory_mb())
+        minimum = float(self.config.get("local_reranker_min_available_mb", 1024))
+        if available is None or float(available) < minimum:
+            if self.config.get("local_reranker_auto_disable_on_low_memory", True):
+                self._reranker_disabled_reason = "memory_telemetry_unavailable" if available is None else "low_available_memory"
+                return candidates
+            raise RuntimeError("local cross-encoder reranker requires more available memory")
+        reranker = self.config.get("local_reranker")
+        if reranker is None:
+            try:
+                model = self.config.get("local_reranker_model")
+                if not model:
+                    raise ValueError("local_reranker_model is required")
+                with _LOCAL_RERANKER_LOCK:
+                    reranker = _LOCAL_RERANKERS.get(str(model))
+                    if reranker is None:
+                        from sentence_transformers import CrossEncoder
+                        reranker = CrossEncoder(model, max_length=int(self.config.get("local_reranker_max_length", 512)))
+                        _LOCAL_RERANKERS[str(model)] = reranker
+            except Exception as exc:
+                if self.config.get("local_reranker_auto_disable_on_error", False):
+                    self._reranker_disabled_reason = f"unavailable:{type(exc).__name__}"
+                    return candidates
+                raise RuntimeError("local_reranker_mode=cross_encoder requires sentence-transformers and its configured model") from exc
+        base_all = normalize_scores([float(item.get("score", 0.0)) for item in candidates])
+        for item, base_value in zip(candidates, base_all):
+            item["score"] = base_value
+        pool = sorted(candidates, key=lambda item: (-float(item.get("score", 0.0)), item["id"]))[:max(1, int(self.config.get("local_reranker_top_k", 20)))]
+        raw = list(reranker.predict([(question, self._candidate_text(item)) for item in pool], batch_size=int(self.config.get("local_reranker_batch_size", 8))))
+        calibrated = calibrate_scores([float(value) for value in raw], self.config.get("local_reranker_calibration_mode", "minmax"))
+        alpha = float(self.config.get("local_reranker_weight", .35))
+        for item, raw_value, calibrated_value in zip(pool, raw, calibrated):
+            base_value = float(item["score"])
+            item["reranker_raw_score"] = float(raw_value)
+            item["reranker_calibrated_score"] = float(calibrated_value)
+            item["score"] = 0.0 if base_value <= 1e-12 else (1.0 - alpha) * base_value + alpha * float(calibrated_value)
+            item["fused_score"] = item["score"]
+        return candidates
 
     def _ppr(self, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         with get_usage_tracker().scope("event_state.ppr"):
@@ -743,6 +1015,34 @@ class EventStateRetriever:
                 source_ids_cache[key] = self._source_ids(item)
             return source_ids_cache[key]
 
+        source_scores: Dict[Any, float] = {}
+        preferred_sources: set[Any] = set()
+        if mode == "source_coherent_mmr":
+            grouped: Dict[Any, List[float]] = defaultdict(list)
+            for item in remaining:
+                for source in source_ids(item):
+                    if source is not None:
+                        grouped[source].append(relevance_by_id[item["id"]])
+            additional = max(0, int(self.config.get("source_coherence_additional_candidates", 2)))
+            for source, scores in grouped.items():
+                ranked = sorted(scores, reverse=True)
+                source_scores[source] = ranked[0] + sum(ranked[1:additional + 1]) * float(self.config.get("source_coherence_additional_weight", .35))
+            ordered_sources = sorted(source_scores, key=lambda source: (-source_scores[source], str(source)))
+            if ordered_sources:
+                preferred_sources.add(ordered_sources[0])
+                best = source_scores[ordered_sources[0]]
+                max_sources = self.config.get("source_coherence_max_sources", None)
+                max_sources = len(ordered_sources) if max_sources is None else max(1, int(max_sources))
+                mass = max(0.0, min(1.0, float(self.config.get("source_coherence_score_mass", .85))))
+                ratio = max(0.0, float(self.config.get("source_coherence_score_ratio", .7)))
+                accumulated = source_scores[ordered_sources[0]]
+                total = sum(source_scores.values()) or 1.0
+                for source in ordered_sources[1:max_sources]:
+                    if source_scores[source] < best * ratio and accumulated / total >= mass:
+                        continue
+                    preferred_sources.add(source)
+                    accumulated += source_scores[source]
+
         while remaining and len(selected) < count:
             # Preserve the established semantic/episode evidence path when it
             # exists; immutable turns complement it rather than replacing the
@@ -775,6 +1075,14 @@ class EventStateRetriever:
                             value += float(self.config.get("representation_balance_bonus", .02))
                         if source_ids(item) - selected_source_ids:
                             value += float(self.config.get("source_diversity_bonus", .02))
+                    if mode == "source_coherent_mmr":
+                        sources = source_ids(item)
+                        if sources & preferred_sources:
+                            value += float(self.config.get("source_coherence_bonus", .08))
+                        elif sources:
+                            # A soft penalty retains genuinely strong evidence
+                            # from an otherwise less competitive source.
+                            value -= float(self.config.get("source_coherence_penalty", .04))
                     return value
 
                 scores = {id(item): score(item) for item in choices}
@@ -790,6 +1098,31 @@ class EventStateRetriever:
             item["selected_rank"] = rank
         return selected
 
+    def source_coherence_diagnostics(self, candidates: Sequence[Dict[str, Any]], selected: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+        """Return bounded source provenance diagnostics for final selection."""
+        sources = set()
+        for item in candidates:
+            sources.update(source for source in self._source_ids(item) if source is not None)
+        selected_sources = set()
+        for item in selected:
+            selected_sources.update(source for source in self._source_ids(item) if source is not None)
+        scores: Dict[str, float] = {}
+        for item in candidates:
+            for source in self._source_ids(item):
+                if source is not None:
+                    scores[str(source)] = max(scores.get(str(source), 0.0), float(item.get("final_score", item.get("score", 0.0))))
+        return {
+            "source_coherence_mode": self.config.get("selector_mode", "state_mmr"),
+            "candidate_source_session_count": len(sources),
+            "selected_source_session_count": len(selected_sources),
+            "selected_source_session_ids": sorted(str(source) for source in selected_sources)[:32],
+            "top_source_scores": [
+                {"source_session_id": source, "score": score}
+                for source, score in sorted(scores.items(), key=lambda item: (-item[1], item[0]))[:16]
+            ],
+            "source_coherence_filter_count": 0,
+        }
+
     def _vector(self, identifier: str, record_type: str) -> Sequence[float]:
         if record_type == "state_claim":
             return self.store.claim_embeddings.get(identifier, [])
@@ -799,7 +1132,9 @@ class EventStateRetriever:
 
     def _source_ids(self, item: Dict[str, Any]) -> set[Any]:
         if item["type"] == "episode":
-            return {self.store.episodes[item["id"]].source_session_id}
+            episode = self.store.episodes.get(item["id"])
+            return {episode.source_session_id} if episode is not None else set()
         if item["type"] == "turn":
             return {self.store.turn_metadata.get(item["id"], {}).get("source_session_id")}
-        return {ref.source_session_id for ref in self.store.claims[item["id"]].evidence}
+        claim = self.store.claims.get(item["id"])
+        return {ref.source_session_id for ref in claim.evidence} if claim is not None else set()

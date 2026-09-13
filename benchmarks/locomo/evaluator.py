@@ -174,6 +174,52 @@ class LoCoMoEvaluator:
         """Use the query-specific limit, retaining compatibility with test fixtures."""
         return max(1, int(getattr(self, "query_workers", getattr(self, "workers", 1))))
 
+    @staticmethod
+    def _available_memory_mb() -> Optional[float]:
+        """Best-effort available memory without making psutil a dependency."""
+        try:
+            import psutil  # type: ignore
+            return float(psutil.virtual_memory().available) / (1024 * 1024)
+        except Exception:
+            pass
+        try:
+            values = {}
+            with open("/proc/meminfo", "r", encoding="ascii") as handle:
+                for line in handle:
+                    key, value = line.split(":", 1)
+                    values[key] = int(value.strip().split()[0])
+            return float(values["MemAvailable"]) / 1024.0
+        except Exception:
+            return None
+
+    def _event_state_query_execution(self, requested: int) -> Dict[str, Any]:
+        retrieval = (getattr(self.method_config, "raw_config", {}) or {}).get("retrieval_config", {})
+        mode = retrieval.get("query_manager_reuse_mode", "auto")
+        available = self._available_memory_mb()
+        guard = bool(retrieval.get("query_memory_guard_enabled", True))
+        reserve = max(0.0, float(retrieval.get("query_memory_reserve_mb", 1024)))
+        minimum = max(0.0, float(retrieval.get("query_memory_min_available_mb", 512)))
+        fraction = float(retrieval.get("query_memory_max_fraction", .5))
+        estimate = retrieval.get("query_worker_memory_estimate_mb")
+        estimate = float(estimate) if estimate is not None else max(128.0, reserve * .25)
+        effective, reason = max(1, requested), None
+        resolved = "shared" if mode == "auto" else mode
+        if resolved == "worker_local" and guard:
+            if available is None:
+                effective, reason = min(effective, 1), "memory_telemetry_unavailable"
+            else:
+                usable = max(0.0, min(available - reserve, available * fraction))
+                cap = max(1, int(usable // max(1.0, estimate)))
+                effective = min(effective, cap)
+                if effective < requested:
+                    reason = "available_memory_budget"
+                if available < minimum:
+                    effective, reason = 1, "below_minimum_available_memory"
+        return {"requested_query_workers": requested, "effective_query_workers": effective,
+                "query_manager_reuse_mode": resolved, "available_memory_before_mb": available,
+                "estimated_worker_memory_mb": estimate, "memory_guard_triggered": reason is not None,
+                "memory_guard_reason": reason, "imported_manager_count": 0, "reused_query_count": 0}
+
     def _batch_config_hash(self) -> str:
         """Bind a resumable batch manifest to the evaluated configuration."""
         payload = {
@@ -1578,6 +1624,18 @@ class LoCoMoEvaluator:
                 self.agent_manager, unit.context_id
             )
 
+        execution = self._event_state_query_execution(self._query_worker_count()) if event_state_snapshot is not None else None
+        shared_manager = None
+        worker_local = threading.local()
+        if event_state_snapshot is not None and execution and execution["query_manager_reuse_mode"] == "shared":
+            shared_manager = AgentManager(
+                method_config=self.method_config, dataset_config=self.dataset_config,
+                batch_api=self.batch_api, batch_gcs_uri=self.batch_gcs_uri,
+                batch_wait=self.batch_wait, workers=1,
+            )
+            shared_manager.import_memory_state(event_state_snapshot, context_id=unit.context_id)
+            execution["imported_manager_count"] = 1
+
         def prepare_item(item):
             query, _, _, batch_request_time, prepared = item
             if prepared is not None:
@@ -1589,26 +1647,35 @@ class LoCoMoEvaluator:
             )
             manager = self.agent_manager
             if event_state_snapshot is not None:
-                # Retrieval preparation is parallel but never shares an active
-                # Event-State store with another query worker.
-                manager = AgentManager(
-                    method_config=self.method_config,
-                    dataset_config=self.dataset_config,
-                    batch_api=self.batch_api,
-                    batch_gcs_uri=self.batch_gcs_uri,
-                    batch_wait=self.batch_wait,
-                    workers=1,
-                )
-                manager.import_memory_state(event_state_snapshot, context_id=unit.context_id)
-            return manager.prepare_batch_query(
+                mode = execution["query_manager_reuse_mode"]
+                if mode == "shared":
+                    manager = shared_manager
+                elif mode == "worker_local":
+                    manager = getattr(worker_local, "manager", None)
+                    if manager is None:
+                        manager = AgentManager(method_config=self.method_config, dataset_config=self.dataset_config,
+                            batch_api=self.batch_api, batch_gcs_uri=self.batch_gcs_uri, batch_wait=self.batch_wait, workers=1)
+                        manager.import_memory_state(event_state_snapshot, context_id=unit.context_id)
+                        worker_local.manager = manager
+                        execution["imported_manager_count"] += 1
+                else:  # Explicit legacy mode intentionally retains one import per query.
+                    manager = AgentManager(method_config=self.method_config, dataset_config=self.dataset_config,
+                        batch_api=self.batch_api, batch_gcs_uri=self.batch_gcs_uri, batch_wait=self.batch_wait, workers=1)
+                    manager.import_memory_state(event_state_snapshot, context_id=unit.context_id)
+                    execution["imported_manager_count"] += 1
+            prepared_result = manager.prepare_batch_query(
                 formatted_question,
                 query_id=query.query_id,
                 context_id=unit.context_id,
                 batch_request_time=batch_request_time,
                 **self._answer_query_kwargs(query),
             )
+            if execution is not None:
+                execution["reused_query_count"] += 1 if execution["query_manager_reuse_mode"] != "legacy" else 0
+                prepared_result.setdefault("extra", {}).setdefault("query_execution", dict(execution))
+            return prepared_result
 
-        worker_count = self._query_worker_count()
+        worker_count = execution["effective_query_workers"] if execution is not None else self._query_worker_count()
         preparation_started = time.perf_counter()
         if worker_count > 1 and len(query_items) > 1:
             with ThreadPoolExecutor(max_workers=min(worker_count, len(query_items))) as executor:

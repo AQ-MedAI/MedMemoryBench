@@ -1,0 +1,45 @@
+# Merge this retrieval_config block into an Event-State method config.
+# The standard checked-in method config is intentionally not edited here because
+# it has user-owned unstaged changes in this worktree.
+build_config:
+  event_state_semantic_version: "2.9"
+retrieval_config:
+  query_manager_reuse_mode: auto
+  query_memory_guard_enabled: true
+  query_memory_reserve_mb: 1024
+  query_memory_max_fraction: 0.5
+  query_memory_min_available_mb: 512
+  query_worker_memory_estimate_mb: null
+  fusion_mode: rrf
+  score_calibration_mode: minmax
+  selector_mode: state_mmr
+  source_coherence_max_sources: null
+  source_coherence_score_ratio: 0.7
+  source_coherence_score_mass: 0.85
+  source_coherence_additional_candidates: 2
+  source_coherence_additional_weight: 0.35
+  source_coherence_bonus: 0.08
+  source_coherence_penalty: 0.04
+  turn_lexical_retrieval_enabled: true
+  turn_lexical_mode: overlap
+  turn_sparse_unit: turn
+  bm25_k1: 1.2
+  bm25_b: 0.75
+  turn_chunk_min_chars: 24
+  turn_chunk_max_per_turn: 8
+  episode_relevance_mode: summary
+  episode_summary_weight: 0.5
+  episode_best_turn_weight: 0.5
+  episode_excerpt_mode: global
+  local_reranker_mode: off
+  local_reranker_model: null
+  local_reranker_top_k: 20
+  local_reranker_batch_size: 8
+  local_reranker_weight: 0.35
+  local_reranker_max_length: 512
+  local_reranker_min_available_mb: 1024
+  local_reranker_auto_disable_on_low_memory: true
+  temporal_query_mode: legacy
+  evidence_budget_mode: fixed
+  adaptive_evidence_min: null
+  adaptive_evidence_max: null

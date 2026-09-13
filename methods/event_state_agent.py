@@ -162,12 +162,40 @@ class EventStateAgent(BaseAgent):
 
     METHOD_TYPE = "agentic_memory"
 
-    def __init__(self, model="gpt-4o-mini", temperature=1.0, max_tokens=2000, provider="openai", api_key=None, base_url=None, llm_client_kwargs=None, memory_model=None, memory_provider=None, memory_temperature=0.0, memory_max_tokens=1800, memory_api_key=None, memory_base_url=None, memory_llm_client_kwargs=None, llm_client=None, memory_llm_client=None, embedding_model="sentence-transformers/all-MiniLM-L6-v2", embedding_provider="local", embedding_model_path=None, embedding_api_key=None, embedding_base_url=None, embedding_client=None, enable_episodes=True, enable_state_claims=True, enable_state_compilation=True, extraction_max_tokens=1800, extraction_temperature=0.0, max_claims_per_episode=20, state_candidate_top_k=5, state_current_candidate_top_k=3, state_candidate_min_similarity=0.45, update_min_confidence=0.55, update_temperature=0.0, update_max_tokens=800, store_raw_episode_text=True, enable_bitemporal_time=True, event_time_normalization_enabled=True, preserve_turn_evidence=True, max_context_tokens=120000, retrieve_claims=True, retrieve_episodes=True, retrieve_turns=True, claim_top_k=30, episode_top_k=20, turn_top_k=8, candidate_count=40, fusion_mode="rrf", rrf_k=60.0, claim_retrieval_weight=1.0, episode_retrieval_weight=1.0, turn_retrieval_weight=1.0, turn_lexical_retrieval_enabled=False, turn_lexical_retrieval_weight=1.0, temporal_retrieval_enabled=True, temporal_retrieval_weight=1.0, ppr_enabled=False, ppr_alpha=0.85, ppr_max_iterations=20, ppr_tolerance=1e-6, ppr_expand_hops=2, ppr_mix_weight=0.35, ppr_weight_supersedes=1.2, ppr_weight_refines=1.0, ppr_weight_conflict=0.8, ppr_weight_evidence=0.7, selector_mode="state_mmr", evidence_count=8, turn_evidence_count=0, mmr_lambda=0.7, state_relation_bonus=0.05, source_diversity_bonus=0.02, representation_balance_bonus=0.02, inject_source_evidence=True, max_source_excerpts_per_claim=2, max_episode_source_excerpts_total=2, event_state_workers=1, planner_rounds=0, planner_max_requests=3, planner_mode=None, query_compiler_max_searches=3, query_compiler_max_tokens=256, planner_temperature=0.0, planner_max_tokens=1200, planner_merge_mode="coverage_interleave", **kwargs):
+    def __init__(self, model="gpt-4o-mini", temperature=1.0, max_tokens=2000, provider="openai", api_key=None, base_url=None, llm_client_kwargs=None, memory_model=None, memory_provider=None, memory_temperature=0.0, memory_max_tokens=1800, memory_api_key=None, memory_base_url=None, memory_llm_client_kwargs=None, llm_client=None, memory_llm_client=None, embedding_model="sentence-transformers/all-MiniLM-L6-v2", embedding_provider="local", embedding_model_path=None, embedding_api_key=None, embedding_base_url=None, embedding_client=None, enable_episodes=True, enable_state_claims=True, enable_state_compilation=True, extraction_max_tokens=1800, extraction_temperature=0.0, max_claims_per_episode=20, state_candidate_top_k=5, state_current_candidate_top_k=3, state_candidate_min_similarity=0.45, update_min_confidence=0.55, update_temperature=0.0, update_max_tokens=800, store_raw_episode_text=True, enable_bitemporal_time=True, event_time_normalization_enabled=True, preserve_turn_evidence=True, max_context_tokens=120000, retrieve_claims=True, retrieve_episodes=True, retrieve_turns=True, claim_top_k=30, episode_top_k=20, turn_top_k=8, candidate_count=40, fusion_mode="rrf", rrf_k=60.0, claim_retrieval_weight=1.0, episode_retrieval_weight=1.0, turn_retrieval_weight=1.0, turn_lexical_retrieval_enabled=False, turn_lexical_retrieval_weight=1.0, temporal_retrieval_enabled=True, temporal_retrieval_weight=1.0, ppr_enabled=False, ppr_alpha=0.85, ppr_max_iterations=20, ppr_tolerance=1e-6, ppr_expand_hops=2, ppr_mix_weight=0.35, ppr_weight_supersedes=1.2, ppr_weight_refines=1.0, ppr_weight_conflict=0.8, ppr_weight_evidence=0.7, selector_mode="state_mmr", evidence_count=8, turn_evidence_count=0, mmr_lambda=0.7, state_relation_bonus=0.05, source_diversity_bonus=0.02, representation_balance_bonus=0.02, inject_source_evidence=True, max_source_excerpts_per_claim=2, max_episode_source_excerpts_total=2, event_state_workers=1, planner_rounds=0, planner_max_requests=3, planner_mode=None, query_compiler_max_searches=3, query_compiler_max_tokens=256, planner_temperature=0.0, planner_max_tokens=1200, planner_merge_mode="coverage_interleave", query_manager_reuse_mode="auto", query_memory_guard_enabled=True, query_memory_reserve_mb=1024, query_memory_max_fraction=.5, query_memory_min_available_mb=512, query_worker_memory_estimate_mb=None, score_calibration_mode="minmax", turn_lexical_mode="overlap", turn_sparse_unit="turn", bm25_k1=1.2, bm25_b=.75, turn_chunk_min_chars=24, turn_chunk_max_per_turn=8, episode_relevance_mode="summary", episode_summary_weight=.5, episode_best_turn_weight=.5, episode_excerpt_mode="global", local_reranker_mode="off", local_reranker_model=None, local_reranker_top_k=20, local_reranker_batch_size=8, local_reranker_weight=.35, local_reranker_max_length=512, local_reranker_min_available_mb=1024, local_reranker_auto_disable_on_low_memory=True, temporal_query_mode="legacy", evidence_budget_mode="fixed", adaptive_evidence_min=None, adaptive_evidence_max=None, source_coherence_max_sources=None, source_coherence_score_ratio=.7, source_coherence_score_mass=.85, source_coherence_additional_candidates=2, source_coherence_additional_weight=.35, source_coherence_bonus=.08, source_coherence_penalty=.04, **kwargs):
         super().__init__(model, temperature, max_tokens, **kwargs)
-        if fusion_mode != "rrf":
-            raise ValueError("Event-State fusion_mode currently supports only 'rrf'")
-        if selector_mode not in {"topk", "mmr", "state_mmr"}:
-            raise ValueError("selector_mode must be topk, mmr, or state_mmr")
+        if fusion_mode not in {"rrf", "weighted_score"}:
+            raise ValueError("fusion_mode must be rrf or weighted_score")
+        if selector_mode not in {"topk", "mmr", "state_mmr", "source_coherent_mmr"}:
+            raise ValueError("selector_mode must be topk, mmr, state_mmr, or source_coherent_mmr")
+        if query_manager_reuse_mode not in {"legacy", "shared", "worker_local", "auto"}:
+            raise ValueError("query_manager_reuse_mode must be legacy, shared, worker_local, or auto")
+        if score_calibration_mode not in {"none", "minmax", "sigmoid_zscore"}:
+            raise ValueError("score_calibration_mode must be none, minmax, or sigmoid_zscore")
+        if turn_lexical_mode not in {"overlap", "bm25"} or turn_sparse_unit not in {"turn", "sentence_chunk"}:
+            raise ValueError("turn_lexical_mode must be overlap or bm25 and turn_sparse_unit must be turn or sentence_chunk")
+        if episode_relevance_mode not in {"summary", "summary_plus_best_turn"} or episode_excerpt_mode not in {"global", "joint"}:
+            raise ValueError("unsupported episode relevance or excerpt mode")
+        if local_reranker_mode not in {"off", "cross_encoder"} or temporal_query_mode not in {"legacy", "dual_axis_semantic"}:
+            raise ValueError("unsupported local reranker or temporal query mode")
+        if evidence_budget_mode not in {"fixed", "adaptive"}:
+            raise ValueError("evidence_budget_mode must be fixed or adaptive")
+        if float(query_memory_reserve_mb) < 0 or float(query_memory_min_available_mb) < 0 or not 0 < float(query_memory_max_fraction) <= 1:
+            raise ValueError("query memory reserve/minimum must be non-negative and max fraction must be in (0, 1]")
+        if float(bm25_k1) <= 0 or not 0 <= float(bm25_b) <= 1:
+            raise ValueError("bm25_k1 must be positive and bm25_b must be in [0, 1]")
+        if not 0 <= float(local_reranker_weight) <= 1:
+            raise ValueError("local_reranker_weight must be in [0, 1]")
+        if float(episode_summary_weight) < 0 or float(episode_best_turn_weight) < 0:
+            raise ValueError("episode relevance weights must be non-negative")
+        if not 0 <= float(source_coherence_score_ratio) <= 1 or not 0 <= float(source_coherence_score_mass) <= 1:
+            raise ValueError("source coherence score ratio and mass must be in [0, 1]")
+        if int(turn_chunk_min_chars) < 0 or int(turn_chunk_max_per_turn) < 1:
+            raise ValueError("turn chunk minimum chars must be non-negative and max per turn must be positive")
+        if int(local_reranker_top_k) < 1 or int(local_reranker_batch_size) < 1 or int(local_reranker_max_length) < 1:
+            raise ValueError("local reranker top-k, batch size, and max length must be positive")
+        if adaptive_evidence_min is not None and adaptive_evidence_max is not None and int(adaptive_evidence_min) > int(adaptive_evidence_max):
+            raise ValueError("adaptive_evidence_min must be <= adaptive_evidence_max")
         if enable_state_claims and not enable_episodes:
             raise ValueError("enable_state_claims requires enable_episodes for provenance")
         if not 1 <= int(evidence_count) <= int(candidate_count):
@@ -225,7 +253,13 @@ class EventStateAgent(BaseAgent):
         self._stores: Dict[Any, EventStateStore] = {}
         self._context_id = None
         self._build_config = {"enable_episodes": self.enable_episodes, "enable_state_claims": self.enable_state_claims, "enable_state_compilation": self.enable_state_compilation, "extraction_max_tokens": self.extraction_max_tokens, "extraction_temperature": self.extraction_temperature, "max_claims_per_episode": self.max_claims_per_episode, "state_candidate_top_k": int(state_candidate_top_k), "state_current_candidate_top_k": max(1, int(state_current_candidate_top_k)), "state_candidate_min_similarity": float(state_candidate_min_similarity), "update_min_confidence": float(update_min_confidence), "update_temperature": self.update_temperature, "update_max_tokens": self.update_max_tokens, "store_raw_episode_text": self.store_raw_episode_text, "enable_bitemporal_time": self.enable_bitemporal_time, "event_time_normalization_enabled": self.event_time_normalization_enabled, "preserve_turn_evidence": self.preserve_turn_evidence}
-        self._retrieval_config = {"retrieve_claims": bool(retrieve_claims), "retrieve_episodes": bool(retrieve_episodes), "retrieve_turns": bool(retrieve_turns), "claim_top_k": int(claim_top_k), "episode_top_k": int(episode_top_k), "turn_top_k": int(turn_top_k), "candidate_count": int(candidate_count), "fusion_mode": fusion_mode, "rrf_k": float(rrf_k), "claim_retrieval_weight": float(claim_retrieval_weight), "episode_retrieval_weight": float(episode_retrieval_weight), "turn_retrieval_weight": float(turn_retrieval_weight), "turn_lexical_retrieval_enabled": bool(turn_lexical_retrieval_enabled), "turn_lexical_retrieval_weight": float(turn_lexical_retrieval_weight), "temporal_retrieval_enabled": bool(temporal_retrieval_enabled), "temporal_retrieval_weight": float(temporal_retrieval_weight), "ppr_enabled": bool(ppr_enabled), "ppr_alpha": float(ppr_alpha), "ppr_max_iterations": int(ppr_max_iterations), "ppr_tolerance": float(ppr_tolerance), "ppr_expand_hops": int(ppr_expand_hops), "ppr_mix_weight": float(ppr_mix_weight), "ppr_weight_supersedes": float(ppr_weight_supersedes), "ppr_weight_refines": float(ppr_weight_refines), "ppr_weight_conflict": float(ppr_weight_conflict), "ppr_weight_evidence": float(ppr_weight_evidence), "selector_mode": selector_mode, "evidence_count": int(evidence_count), "turn_evidence_count": normalized_turn_evidence_count, "mmr_lambda": float(mmr_lambda), "state_relation_bonus": float(state_relation_bonus), "source_diversity_bonus": float(source_diversity_bonus), "representation_balance_bonus": float(representation_balance_bonus), "max_episode_source_excerpts_total": self.max_episode_source_excerpts_total, "planner_rounds": self.planner_rounds, "planner_mode": self.planner_mode, "query_compiler_max_searches": self.query_compiler_max_searches, "query_compiler_max_tokens": self.query_compiler_max_tokens, "planner_max_requests": self.planner_max_requests, "planner_temperature": self.planner_temperature, "planner_max_tokens": self.planner_max_tokens, "planner_merge_mode": self.planner_merge_mode}
+        self._retrieval_config = {"retrieve_claims": bool(retrieve_claims), "retrieve_episodes": bool(retrieve_episodes), "retrieve_turns": bool(retrieve_turns), "claim_top_k": int(claim_top_k), "episode_top_k": int(episode_top_k), "turn_top_k": int(turn_top_k), "candidate_count": int(candidate_count), "fusion_mode": fusion_mode, "rrf_k": float(rrf_k), "claim_retrieval_weight": float(claim_retrieval_weight), "episode_retrieval_weight": float(episode_retrieval_weight), "turn_retrieval_weight": float(turn_retrieval_weight), "turn_lexical_retrieval_enabled": bool(turn_lexical_retrieval_enabled), "turn_lexical_retrieval_weight": float(turn_lexical_retrieval_weight), "temporal_retrieval_enabled": bool(temporal_retrieval_enabled), "temporal_retrieval_weight": float(temporal_retrieval_weight), "ppr_enabled": bool(ppr_enabled), "ppr_alpha": float(ppr_alpha), "ppr_max_iterations": int(ppr_max_iterations), "ppr_tolerance": float(ppr_tolerance), "ppr_expand_hops": int(ppr_expand_hops), "ppr_mix_weight": float(ppr_mix_weight), "ppr_weight_supersedes": float(ppr_weight_supersedes), "ppr_weight_refines": float(ppr_weight_refines), "ppr_weight_conflict": float(ppr_weight_conflict), "ppr_weight_evidence": float(ppr_weight_evidence), "selector_mode": selector_mode, "evidence_count": int(evidence_count), "turn_evidence_count": normalized_turn_evidence_count, "mmr_lambda": float(mmr_lambda), "state_relation_bonus": float(state_relation_bonus), "source_diversity_bonus": float(source_diversity_bonus), "representation_balance_bonus": float(representation_balance_bonus), "max_episode_source_excerpts_total": self.max_episode_source_excerpts_total, "planner_rounds": self.planner_rounds, "planner_mode": self.planner_mode, "query_compiler_max_searches": self.query_compiler_max_searches, "query_compiler_max_tokens": self.query_compiler_max_tokens, "planner_max_requests": self.planner_max_requests, "planner_temperature": self.planner_temperature, "planner_max_tokens": self.planner_max_tokens, "planner_merge_mode": self.planner_merge_mode,
+            "query_manager_reuse_mode": query_manager_reuse_mode, "query_memory_guard_enabled": bool(query_memory_guard_enabled), "query_memory_reserve_mb": float(query_memory_reserve_mb), "query_memory_max_fraction": float(query_memory_max_fraction), "query_memory_min_available_mb": float(query_memory_min_available_mb), "query_worker_memory_estimate_mb": query_worker_memory_estimate_mb,
+            "score_calibration_mode": score_calibration_mode, "turn_lexical_mode": turn_lexical_mode, "turn_sparse_unit": turn_sparse_unit, "bm25_k1": float(bm25_k1), "bm25_b": float(bm25_b), "turn_chunk_min_chars": int(turn_chunk_min_chars), "turn_chunk_max_per_turn": int(turn_chunk_max_per_turn),
+            "episode_relevance_mode": episode_relevance_mode, "episode_summary_weight": float(episode_summary_weight), "episode_best_turn_weight": float(episode_best_turn_weight), "episode_excerpt_mode": episode_excerpt_mode,
+            "local_reranker_mode": local_reranker_mode, "local_reranker_model": local_reranker_model, "local_reranker_top_k": int(local_reranker_top_k), "local_reranker_batch_size": int(local_reranker_batch_size), "local_reranker_weight": float(local_reranker_weight), "local_reranker_max_length": int(local_reranker_max_length), "local_reranker_min_available_mb": float(local_reranker_min_available_mb), "local_reranker_auto_disable_on_low_memory": bool(local_reranker_auto_disable_on_low_memory),
+            "temporal_query_mode": temporal_query_mode, "evidence_budget_mode": evidence_budget_mode, "adaptive_evidence_min": adaptive_evidence_min, "adaptive_evidence_max": adaptive_evidence_max,
+            "source_coherence_max_sources": source_coherence_max_sources, "source_coherence_score_ratio": float(source_coherence_score_ratio), "source_coherence_score_mass": float(source_coherence_score_mass), "source_coherence_additional_candidates": int(source_coherence_additional_candidates), "source_coherence_additional_weight": float(source_coherence_additional_weight), "source_coherence_bonus": float(source_coherence_bonus), "source_coherence_penalty": float(source_coherence_penalty)}
 
     def _store(self, context_id=None) -> EventStateStore:
         key = self._context_id if context_id is None else context_id
@@ -918,7 +952,7 @@ class EventStateAgent(BaseAgent):
         MMR has already produced ``selection_order``. This pass only applies
         immutable provenance identity and never changes retrieval scores.
         """
-        target = int(self._retrieval_config["evidence_count"])
+        target = self._effective_evidence_budget(selection_order)
         selected: List[Dict[str, Any]] = []
         selected_claim_evidence: Dict[str, Any] = {}
         claimed_turns = set()
@@ -991,7 +1025,27 @@ class EventStateAgent(BaseAgent):
             "effective_selected_turn_count": len(selected_turn_ids),
             "effective_retrieved_record_count": len(selected),
             "selected_claim_evidence": selected_claim_evidence,
+            "effective_evidence_budget": target,
         }
+
+    def _effective_evidence_budget(self, selection_order: Sequence[Dict[str, Any]]) -> int:
+        """Use a bounded score-shape heuristic only when adaptive mode is selected."""
+        fixed = int(self._retrieval_config["evidence_count"])
+        if self._retrieval_config.get("evidence_budget_mode", "fixed") != "adaptive":
+            return fixed
+        minimum = self._retrieval_config.get("adaptive_evidence_min")
+        maximum = self._retrieval_config.get("adaptive_evidence_max")
+        minimum = fixed if minimum is None else max(1, int(minimum))
+        maximum = fixed if maximum is None else max(minimum, int(maximum))
+        scores = sorted((max(0.0, float(item.get("final_score", item.get("score", 0.0)))) for item in selection_order), reverse=True)
+        if len(scores) < 2 or scores[0] <= 0:
+            return minimum
+        gap = (scores[0] - scores[1]) / scores[0]
+        strong = sum(score >= scores[0] * .75 for score in scores)
+        # Flat score distributions and several strong candidates get a larger
+        # budget; focused queries remain close to the configured minimum.
+        fraction = min(1.0, max(0.0, (1.0 - gap) * min(1.0, strong / 4.0)))
+        return min(maximum, max(minimum, round(minimum + (maximum - minimum) * fraction)))
 
     def _effective_separate_evidence_selection(
         self,
@@ -1213,15 +1267,34 @@ class EventStateAgent(BaseAgent):
                 continue
             indexed_turn_keys.add(key)
             indexed_turns.append((item, episode, turn))
+        excluded_episode_turns = claimed_turns | indexed_turn_keys
         episode_evidence_by_id, episode_evidence_candidate_turn_count, episode_evidence_deduplicated_against_claim_count = select_global_episode_evidence(
-            selected_episodes,
-            query_vector,
-            self._embedder,
-            self.max_episode_source_excerpts_total,
-            claimed_turns | indexed_turn_keys,
-            query_vectors=query_vectors,
-            turn_vector_cache=turn_vector_cache,
+            selected_episodes, query_vector, self._embedder, self.max_episode_source_excerpts_total,
+            excluded_episode_turns, query_vectors=query_vectors, turn_vector_cache=turn_vector_cache,
         )
+        if self._retrieval_config.get("episode_excerpt_mode", "global") == "joint":
+            # Reserve existing excerpt slots for selected episode support turns,
+            # then use the unchanged global allocator for the remaining slots.
+            preferred = {}
+            selected_by_id = {item["id"]: item for item in selected_memory_items if item["type"] == "episode"}
+            remaining = self.max_episode_source_excerpts_total
+            for _rank, episode in selected_episodes:
+                item = selected_by_id[episode.episode_id]
+                support_key = item.get("episode_support_turn_id")
+                support_episode, support_turn = store.turn_for_key(support_key) if support_key else (None, None)
+                if remaining and support_episode is episode and support_turn is not None and (episode.episode_id, support_turn.turn_id) not in excluded_episode_turns:
+                    preferred.setdefault(episode.episode_id, []).append(support_turn)
+                    remaining -= 1
+            if preferred:
+                preferred_keys = {(episode_id, turn.turn_id) for episode_id, turns in preferred.items() for turn in turns}
+                global_rest, _, _ = select_global_episode_evidence(
+                    selected_episodes, query_vector, self._embedder, remaining,
+                    excluded_episode_turns | preferred_keys, query_vectors=query_vectors,
+                    turn_vector_cache=turn_vector_cache,
+                )
+                episode_evidence_by_id = {**preferred}
+                for episode_id, turns in global_rest.items():
+                    episode_evidence_by_id.setdefault(episode_id, []).extend(turns)
         records = [
             self._record(store, item, episode_evidence_by_id.get(item["id"]))
             for item in selected_memory_items

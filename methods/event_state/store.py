@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import threading
 from dataclasses import asdict, replace
 from typing import Any, Dict, List, Optional
 
@@ -43,6 +45,11 @@ class EventStateStore:
         # Rebuildable provenance index: a raw turn can support several events.
         self.turn_temporal_spans: Dict[tuple[str, Any], List[Dict[str, str]]] = {}
         self.episode_temporal_spans: Dict[str, List[Dict[str, str]]] = {}
+        # Query-only indexes are deliberately absent from exported snapshots.
+        # They are immutable after lazy construction and safe to share between
+        # query workers that use the same restored store.
+        self._turn_bm25_caches: Dict[tuple[Any, ...], Dict[str, Any]] = {}
+        self._turn_bm25_lock = threading.Lock()
 
     @staticmethod
     def stable_id(prefix: str, value: Any) -> str:
@@ -124,6 +131,51 @@ class EventStateStore:
         if episode is None or not isinstance(index, int) or not 0 <= index < len(episode.turn_evidence):
             return None, None
         return episode, episode.turn_evidence[index]
+
+    def turn_bm25_cache(
+        self, *, unit: str = "turn", min_chars: int = 24, max_chunks_per_turn: int = 8,
+    ) -> Dict[str, Any]:
+        """Build a compact, runtime-only sparse index over immutable turns.
+
+        Index rows retain only parent turn provenance and tokens.  In
+        particular, sentence chunks never become Event-State objects or dense
+        embeddings, and raw source text is not copied into the cache.
+        """
+        key = (unit, max(0, int(min_chars)), max(1, int(max_chunks_per_turn)))
+        cached = self._turn_bm25_caches.get(key)
+        if cached is not None:
+            return cached
+        with self._turn_bm25_lock:
+            cached = self._turn_bm25_caches.get(key)
+            if cached is not None:
+                return cached
+            documents, document_frequency, total_length = [], {}, 0
+            for turn_key in sorted(self.turn_embeddings):
+                episode, turn = self.turn_for_key(turn_key)
+                if episode is None or turn is None:
+                    continue
+                text = f"{turn.speaker} {turn.text} {turn.image_caption or ''}"
+                chunks = [text]
+                if unit == "sentence_chunk":
+                    pieces = [piece.strip() for piece in re.split(r"(?<=[.!?])\s+", text) if piece.strip()]
+                    chunks = [piece for piece in pieces if len(piece) >= max(0, int(min_chars))]
+                    if not chunks:
+                        chunks = [text]
+                    chunks = chunks[:max(1, int(max_chunks_per_turn))]
+                for chunk_index, chunk in enumerate(chunks):
+                    tokens = tuple(re.findall(r"[a-z0-9]+", chunk.casefold()))
+                    if not tokens:
+                        continue
+                    documents.append((turn_key, chunk_index, tokens))
+                    total_length += len(tokens)
+                    for token in set(tokens):
+                        document_frequency[token] = document_frequency.get(token, 0) + 1
+            cached = {
+                "documents": tuple(documents), "document_frequency": document_frequency,
+                "average_length": total_length / len(documents) if documents else 0.0,
+            }
+            self._turn_bm25_caches[key] = cached
+            return cached
 
     def add_claim(self, claim: Claim, embedding: List[float], slot_embedding: Optional[List[float]] = None) -> None:
         if claim.persistence == "history":

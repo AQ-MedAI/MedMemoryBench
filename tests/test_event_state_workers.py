@@ -13,6 +13,7 @@ from utils.llm_client import LLMResponse, get_usage_tracker, submit_with_copied_
 from benchmarks.base import EvaluationUnit
 from benchmarks.medmemorybench.dataset import MedSession
 from benchmarks.medmemorybench.evaluator import MedMemoryBenchEvaluator
+from benchmarks.locomo.evaluator import LoCoMoEvaluator
 from methods.base import MemoryBuildResult
 
 
@@ -302,3 +303,21 @@ def test_event_state_preparation_reports_completed_sessions_and_preserves_order(
 
     assert [item.session["source_session_id"] for item in prepared] == [0, 1, 2]
     assert len(completed) == 3
+
+
+def test_event_state_query_memory_guard_caps_worker_local_and_auto_shares(monkeypatch):
+    evaluator = LoCoMoEvaluator.__new__(LoCoMoEvaluator)
+    evaluator.method_config = SimpleNamespace(raw_config={"retrieval_config": {
+        "query_manager_reuse_mode": "worker_local", "query_memory_guard_enabled": True,
+        "query_memory_reserve_mb": 200, "query_memory_max_fraction": 1.0,
+        "query_memory_min_available_mb": 100, "query_worker_memory_estimate_mb": 300,
+    }})
+    monkeypatch.setattr(LoCoMoEvaluator, "_available_memory_mb", staticmethod(lambda: 800.0))
+    execution = evaluator._event_state_query_execution(8)
+    assert execution["effective_query_workers"] == 2
+    assert execution["memory_guard_triggered"] is True
+    evaluator.method_config.raw_config["retrieval_config"]["query_manager_reuse_mode"] = "auto"
+    assert evaluator._event_state_query_execution(8)["query_manager_reuse_mode"] == "shared"
+    monkeypatch.setattr(LoCoMoEvaluator, "_available_memory_mb", staticmethod(lambda: None))
+    evaluator.method_config.raw_config["retrieval_config"]["query_manager_reuse_mode"] = "worker_local"
+    assert evaluator._event_state_query_execution(8)["effective_query_workers"] == 1
