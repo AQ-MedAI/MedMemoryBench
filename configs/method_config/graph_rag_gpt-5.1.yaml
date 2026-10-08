@@ -8,7 +8,7 @@ model:
   provider: "openai"
   name: "gpt-5.1"
   temperature: 0.3
-  max_tokens: 10000
+  max_tokens: 40960
 
 agent_params:
   top_k: 5
@@ -18,4 +18,4 @@ agent_params:
 
 embedding:
   provider: "local"
-  model: "models/bge-small-zh-v1.5"
+  model: "models/bge-small-en-v1.5"

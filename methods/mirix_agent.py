@@ -59,14 +59,10 @@ class MIRIXAgent(BaseAgent):
         # Chunking config
         memorize_chunk_tokens: int = 2500,
         memorize_chunk_overlap_tokens: int = 200,
-        query_memory_item_tokens: int = 300,
-        query_memory_context_tokens: int = 1800,
         # Context limits
         max_input_tokens: int = 8000,
         max_question_tokens: int = 4096,
         max_context_tokens: int = 120000,
-        # Query mode
-        use_native_query: bool = True,  # Use MIRIX native send_message for query
         **kwargs
     ):
         super().__init__(model, temperature, max_tokens, **kwargs)
@@ -89,16 +85,11 @@ class MIRIXAgent(BaseAgent):
         # Chunking config
         self.memorize_chunk_tokens = memorize_chunk_tokens
         self.memorize_chunk_overlap_tokens = memorize_chunk_overlap_tokens
-        self.query_memory_item_tokens = query_memory_item_tokens
-        self.query_memory_context_tokens = query_memory_context_tokens
 
         # Limits
         self.max_input_tokens = max_input_tokens
         self.max_question_tokens = max_question_tokens
         self.max_context_tokens = max_context_tokens
-
-        # Query mode
-        self.use_native_query = use_native_query
 
         # LLM client for fallback Q&A (uses utils/llm_client for token tracking)
         self._llm_client: BaseLLMClient = create_llm_client(
@@ -501,8 +492,17 @@ class MIRIXAgent(BaseAgent):
                                     "content": msg_content,
                                 })
 
+                            elif msg_type == 'reasoning_message':
+                                # ReasoningMessage has reasoning field
+                                reasoning = getattr(msg, 'reasoning', '') or ''
+                                msg_content = str(reasoning)[:500]
+                                response_messages.append({
+                                    "type": "reasoning_message",
+                                    "content": msg_content,
+                                })
+
                             elif msg_type == 'internal_monologue':
-                                # Internal monologue
+                                # Legacy LegacyInternalMonologue
                                 monologue = getattr(msg, 'internal_monologue', '') or ''
                                 msg_content = str(monologue)[:500]
                                 response_messages.append({
@@ -588,101 +588,6 @@ class MIRIXAgent(BaseAgent):
             }
         )
 
-    def _retrieve(self, query: str) -> List[Dict[str, Any]]:
-        """Retrieve relevant memories from MIRIX using all memory types.
-
-        Note: MIRIX's retrieve_memory with memory_type="all" retrieves `limit` items
-        from EACH memory type, then merges them. To ensure we return at most
-        `retrieve_num` total memories, we truncate the final result.
-        """
-        async def do_retrieve():
-            # Calculate per-type limit to avoid over-fetching
-            # With 5 memory types, we want at least 1 from each type
-            # But we'll still truncate the final result to retrieve_num
-            per_type_limit = max(1, (self.retrieve_num + 4) // 5)  # Ceiling division
-
-            results = await self._client.retrieve_memory(
-                agent_id=self._meta_agent.id,
-                query=query,
-                memory_type="all",  # Search all memory types
-                search_method="embedding",  # Use semantic search
-                limit=per_type_limit,  # Per-type limit
-            )
-            return results
-
-        try:
-            results = self._run_async(do_retrieve())
-            memories = []
-
-            if results and "results" in results:
-                for entry in results["results"]:
-                    memory_type = entry.get("memory_type", "unknown")
-
-                    # Build memory content based on type
-                    content_parts = []
-
-                    # Different memory types have different fields
-                    if memory_type == "episodic":
-                        if entry.get("summary"):
-                            content_parts.append(entry["summary"])
-                        if entry.get("details"):
-                            content_parts.append(entry["details"])
-                    elif memory_type == "semantic":
-                        if entry.get("name"):
-                            content_parts.append(f"[{entry['name']}]")
-                        if entry.get("summary"):
-                            content_parts.append(entry["summary"])
-                        if entry.get("details"):
-                            content_parts.append(entry["details"])
-                    elif memory_type == "procedural":
-                        if entry.get("summary"):
-                            content_parts.append(entry["summary"])
-                        if entry.get("steps"):
-                            steps = entry["steps"]
-                            if isinstance(steps, list):
-                                content_parts.append(" -> ".join(steps[:5]))
-                            else:
-                                content_parts.append(str(steps))
-                    elif memory_type == "resource":
-                        if entry.get("summary"):
-                            content_parts.append(entry["summary"])
-                        if entry.get("content"):
-                            content_parts.append(entry["content"][:500])
-                    elif memory_type == "knowledge_vault":
-                        if entry.get("caption"):
-                            content_parts.append(entry["caption"])
-                    else:
-                        # Fallback for unknown types
-                        for field in ["summary", "details", "content", "caption", "name"]:
-                            if entry.get(field):
-                                content_parts.append(str(entry[field]))
-                                break
-
-                    content = " | ".join(content_parts) if content_parts else str(entry)
-
-                    # Truncate individual memory items
-                    content = self._truncate_to_tokens(content, self.query_memory_item_tokens)
-
-                    memories.append({
-                        "memory": content,
-                        "type": memory_type,
-                        "id": entry.get("id", ""),
-                        "raw": entry,
-                    })
-
-            # Truncate to retrieve_num to ensure we don't return more than configured
-            if len(memories) > self.retrieve_num:
-                logger.debug(f"[MIRIXAgent] Truncating memories from {len(memories)} to {self.retrieve_num}")
-                memories = memories[:self.retrieve_num]
-
-            return memories
-
-        except Exception as e:
-            logger.error(f"[MIRIXAgent] Retrieval failed: {e}")
-            import traceback
-            traceback.print_exc()
-            return []
-
     def query(
         self,
         question: str,
@@ -691,190 +596,96 @@ class MIRIXAgent(BaseAgent):
     ) -> AgentResponse:
         """Query the agent with memory-augmented response.
 
-        If use_native_query is True, uses MIRIX's native send_message() which
-        automatically retrieves relevant memories and generates response.
-        Otherwise, falls back to manual retrieval + external LLM call.
+        Uses MIRIX's official extract_memory_for_system_prompt() API which
+        internally: (1) extracts topics from question via LLM,
+        (2) retrieves from all 6 memory types (episodic, semantic, procedural,
+        resource, knowledge_vault, core), (3) builds a formatted system prompt.
+        Then uses external LLM to generate the final answer.
+
+        If extract_memory_for_system_prompt fails, falls back to retrieve_memory API.
         """
         start_time = time.time()
 
-        if self.use_native_query:
-            return self._query_native(question, system_message, start_time)
-        else:
-            return self._query_manual(question, system_message, start_time)
-
-    def _query_native(
-        self,
-        question: str,
-        system_message: Optional[str],
-        start_time: float
-    ) -> AgentResponse:
-        """Query using MIRIX native send_message (recommended).
-
-        This leverages MIRIX's built-in memory retrieval and conversation
-        capabilities, providing a more integrated experience.
-        """
-        # Truncate question
         full_question = self._truncate_to_tokens(question, self.max_question_tokens)
-
-        # Add timestamp for context
-        query_with_time = f"{full_question}\n\nCurrent Time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
-
-        # If there's a system message, prepend it as context
-        if system_message:
-            query_with_context = f"[System Context: {system_message}]\n\n{query_with_time}"
-        else:
-            query_with_context = query_with_time
-
-        response_content = ""
-        retrieved_memories = []
-        query_usage = {"input": 0, "output": 0}
-
-        async def do_query():
-            nonlocal response_content, retrieved_memories, query_usage
-
-            # Use MIRIX native send_message - it will automatically retrieve
-            # relevant memories and use them in the response
-            # NOTE: We don't pass user_id - MIRIX uses LocalClient's default user
-            response = await self._client.send_message(
-                agent_id=self._meta_agent.id,
-                role="user",
-                message=query_with_context,
-            )
-
-            # Extract response content and usage
-            if response:
-                # Record usage to global tracker
-                if hasattr(response, 'usage') and response.usage:
-                    self._record_mirix_usage(response.usage, time.time() - start_time)
-                    query_usage["input"] = getattr(response.usage, 'prompt_tokens', 0)
-                    query_usage["output"] = getattr(response.usage, 'completion_tokens', 0)
-
-                # Extract assistant response
-                if hasattr(response, 'messages'):
-                    for msg in response.messages:
-                        msg_type = getattr(msg, 'message_type', '')
-                        if msg_type == "assistant_message":
-                            response_content = getattr(msg, 'message', '')
-                            break
-
-                    # Also extract any function calls that retrieved memories
-                    for msg in response.messages:
-                        msg_type = getattr(msg, 'message_type', '')
-                        if msg_type == "function_return":
-                            func_return = getattr(msg, 'function_return', '')
-                            # Try to extract memory information from function returns
-                            if isinstance(func_return, str) and len(func_return) < 1000:
-                                retrieved_memories.append({
-                                    "memory": func_return[:300],
-                                    "type": "function_return",
-                                })
-
-        self._run_async(do_query())
-
-        query_time = time.time() - start_time
-
-        return AgentResponse(
-            output=response_content,
-            query_time=query_time,
-            retrieved_count=len(retrieved_memories),
-            retrieved_memories=retrieved_memories[:5],  # Properly set field, limit count for log size
-            extra={
-                "method": "mirix_native",
-                "embedding_model": self.embedding_model,
-                "embedding_provider": self.embedding_provider,
-                "tokens_used": query_usage,
-            }
-        )
-
-    def _query_manual(
-        self,
-        question: str,
-        system_message: Optional[str],
-        start_time: float
-    ) -> AgentResponse:
-        """Query using manual retrieval + external LLM (fallback).
-
-        This retrieves memories via MIRIX's retrieve_memory() API,
-        then generates response using llm_client (ensuring token tracking).
-        """
-        # Retrieve relevant memories
-        retrieved_memories = self._retrieve(question)
-
-        # Truncate question
-        full_question = self._truncate_to_tokens(question, self.max_question_tokens)
-
-        # Add timestamp for context
         full_question = f"{full_question}\n\nCurrent Time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
 
-        # Calculate token budget for memory context
-        base_system = system_message or ""
-        reserved_tokens = self.max_tokens + 400  # Reserve for output and overhead
-        available_tokens = max(self.max_context_tokens - reserved_tokens, 0)
-        question_tokens = self._llm_client.count_tokens(full_question)
-        base_system_tokens = self._llm_client.count_tokens(base_system) if base_system else 0
-        memory_budget = max(available_tokens - question_tokens - base_system_tokens, 0)
-        memory_budget = min(memory_budget, self.query_memory_context_tokens)
+        memory_prompt = ""
+        retrieved_memories = []
 
-        # Build memory context with truncation
-        memory_lines = []
-        used_tokens = 0
+        async def do_extract():
+            nonlocal memory_prompt, retrieved_memories
+            try:
+                memory_prompt = await self._client.extract_memory_for_system_prompt(
+                    agent_id=self._meta_agent.id,
+                    message=full_question,
+                )
+                if memory_prompt:
+                    retrieved_memories.append({
+                        "memory": memory_prompt[:2000],
+                        "type": "mirix_system_prompt",
+                        "source": "extract_memory_for_system_prompt",
+                    })
+            except Exception as e:
+                logger.warning(f"[MIRIXAgent] extract_memory_for_system_prompt failed: {e}, trying retrieve_memory fallback...")
+                # Fallback: use retrieve_memory API which correctly handles user
+                try:
+                    result = await self._client.retrieve_memory(
+                        agent_id=self._meta_agent.id,
+                        query=full_question,
+                        memory_type="all",
+                        search_method="bm25",
+                        limit=self.retrieve_num,
+                    )
+                    if result and result.get("count", 0) > 0:
+                        memory_items = result.get("results", [])
+                        memory_texts = []
+                        for item in memory_items:
+                            mem_type = item.get("memory_type", "unknown")
+                            summary = item.get("summary", "")
+                            details = item.get("details", "")
+                            content = summary or details
+                            if content:
+                                memory_texts.append(f"[{mem_type}] {content}")
+                                retrieved_memories.append({
+                                    "memory": content[:500],
+                                    "type": mem_type,
+                                    "source": "retrieve_memory_fallback",
+                                })
+                        if memory_texts:
+                            memory_prompt = "<memory>\n" + "\n".join(memory_texts) + "\n</memory>"
+                except Exception as fallback_err:
+                    logger.error(f"[MIRIXAgent] retrieve_memory fallback also failed: {fallback_err}")
+                    memory_prompt = ""
 
-        for entry in retrieved_memories:
-            memory_text = entry.get("memory", "")
-            if not memory_text:
-                continue
+        self._run_async(do_extract())
 
-            line = f"[{entry.get('type', 'memory')}] {memory_text}"
-            line_tokens = self._llm_client.count_tokens(line)
-
-            if used_tokens + line_tokens <= memory_budget:
-                memory_lines.append(line)
-                used_tokens += line_tokens
-            else:
-                # Try to fit truncated version
-                remaining = memory_budget - used_tokens
-                if remaining > 50:
-                    truncated = self._truncate_to_tokens(line, remaining)
-                    memory_lines.append(truncated)
-                break
-
-        # Build final prompt with memories
-        if memory_lines:
-            memories_str = "\n".join(memory_lines)
-            memory_prompt = f"Relevant memories from MIRIX:\n{memories_str}\n\nBased on the above memories, please answer the question."
-
-            if system_message:
-                full_system = f"{system_message}\n\n{memory_prompt}"
-            else:
-                full_system = memory_prompt
+        if memory_prompt:
+            full_system = f"{system_message}\n\n{memory_prompt}" if system_message else memory_prompt
         else:
             full_system = system_message
 
-        # Call LLM for response (uses llm_client which tracks tokens)
+        # Enforce max_context_tokens: truncate system message if total exceeds limit
+        question_tokens = len(self._tokenizer.encode(full_question))
+        reserved_output = self.max_tokens
+        max_system_tokens = self.max_context_tokens - question_tokens - reserved_output
+        if max_system_tokens > 0 and full_system:
+            full_system = self._truncate_to_tokens(full_system, max_system_tokens)
+
         messages = format_messages(full_question, full_system)
         response = self._llm_client.chat(messages)
 
         query_time = time.time() - start_time
 
-        # Build retrieved_memories format for evaluation framework
-        formatted_memories = [
-            {
-                "memory": m["memory"][:500],
-                "type": m.get("type", "unknown"),
-            }
-            for m in retrieved_memories
-        ]
-
         return AgentResponse(
             output=response.content,
             query_time=query_time,
             retrieved_count=len(retrieved_memories),
-            retrieved_memories=formatted_memories,  # Properly set field
+            retrieved_memories=retrieved_memories,
             extra={
-                "method": "mirix_manual",
+                "method": "mirix_extract",
                 "embedding_model": self.embedding_model,
                 "embedding_provider": self.embedding_provider,
-                "memory_types_retrieved": list(set(m.get("type", "unknown") for m in retrieved_memories)),
+                "memory_prompt_tokens": self.count_tokens(memory_prompt) if memory_prompt else 0,
                 "tokens_used": {
                     "input": response.input_tokens,
                     "output": response.output_tokens,
@@ -883,17 +694,16 @@ class MIRIXAgent(BaseAgent):
         )
 
     def reset(self) -> None:
-        """Reset agent state and completely reinitialize MIRIX.
+        """Reset agent state for new persona evaluation.
 
-        This performs a thorough cleanup for both PostgreSQL and SQLite:
-        1. Hard delete all memory data via MIRIX API (works for both database types)
-        2. Delete all agents created by the current client
-        3. Additionally clean up SQLite files if they exist (for SQLite mode)
-        4. Recreate fresh LocalClient and MetaAgent for new persona
+        Keeps the existing LocalClient (preserving client_id/organization_id consistency)
+        and only clears memory data + recreates the MetaAgent and its sub-agents.
 
-        This ensures complete data isolation between different personas during evaluation.
+        This ensures:
+        - Complete data isolation between different personas
+        - No agent_id/client_id mismatch after reset (the root cause of NoResultFound errors)
         """
-        logger.info("[MIRIXAgent] Resetting agent state (full database cleanup)...")
+        logger.info("[MIRIXAgent] Resetting agent state...")
         super().reset()
 
         # Reset token counters
@@ -901,140 +711,98 @@ class MIRIXAgent(BaseAgent):
         self._mirix_output_tokens = 0
         self._mirix_step_count = 0
 
-        # Step 1: Clean up via MIRIX API (works for both PostgreSQL and SQLite)
-        if self._client:
-            try:
-                async def cleanup_all_data():
-                    """Clean up all memory data and agents for the current client."""
-                    client_id = self._client.client_id
+        if not self._client:
+            logger.warning("[MIRIXAgent] No client exists, performing full initialization")
+            self._init_mirix()
+            return
 
-                    # Hard delete ALL memory data using client_manager
-                    # This removes: episodic, semantic, procedural, resource, knowledge vault,
-                    # messages, and blocks - ensuring complete persona isolation
-                    try:
-                        logger.info(f"[MIRIXAgent] Deleting all memories for client {client_id}...")
-                        await self._client.server.client_manager.delete_memories_by_client_id(client_id)
-                        logger.info(f"[MIRIXAgent] Successfully deleted all memories for client {client_id}")
-                    except Exception as e:
-                        logger.warning(f"[MIRIXAgent] Failed to bulk delete memories: {e}")
-                        # Fallback: try to delete individual memory types
-                        await fallback_cleanup_memories()
+        try:
+            async def cleanup_and_recreate():
+                client_id = self._client.client_id
 
-                    # Delete the MetaAgent and all its sub-agents
+                # Step 1: Delete all memory data (episodic, semantic, procedural, etc.)
+                try:
+                    await self._client.server.client_manager.delete_memories_by_client_id(client_id)
+                    logger.info(f"[MIRIXAgent] Deleted all memories for client {client_id}")
+                except Exception as e:
+                    logger.warning(f"[MIRIXAgent] Bulk delete memories failed: {e}, trying fallback...")
+                    await self._fallback_cleanup_memories()
+
+                # Step 2: Delete all agents (MetaAgent + sub-agents + orphans)
+                try:
+                    agents = await self._client.list_agents()
+                    for agent in agents:
+                        try:
+                            await self._client.delete_agent(agent.id)
+                        except Exception as e:
+                            logger.debug(f"[MIRIXAgent] Failed to delete agent {agent.id}: {e}")
+                    if agents:
+                        logger.info(f"[MIRIXAgent] Deleted {len(agents)} agents")
+                except Exception as e:
+                    logger.warning(f"[MIRIXAgent] Failed to list/delete agents: {e}")
+                    # If listing fails, at least try to delete the known MetaAgent
                     if self._meta_agent:
                         try:
                             await self._client.delete_agent(self._meta_agent.id)
-                            logger.info(f"[MIRIXAgent] Deleted MetaAgent: {self._meta_agent.id}")
-                        except Exception as e:
-                            logger.warning(f"[MIRIXAgent] Failed to delete MetaAgent: {e}")
+                        except Exception:
+                            pass
 
-                    # Clean up any remaining orphaned agents
-                    try:
-                        agents = await self._client.list_agents()
-                        for agent in agents:
-                            try:
-                                await self._client.delete_agent(agent.id)
-                                logger.debug(f"[MIRIXAgent] Cleaned up orphaned agent: {agent.id}")
-                            except Exception as e:
-                                logger.debug(f"[MIRIXAgent] Failed to cleanup agent {agent.id}: {e}")
-                        if agents:
-                            logger.info(f"[MIRIXAgent] Cleaned up {len(agents)} orphaned agents")
-                    except Exception as e:
-                        logger.debug(f"[MIRIXAgent] Failed to list agents for cleanup: {e}")
+            self._run_async(cleanup_and_recreate())
 
-                async def fallback_cleanup_memories():
-                    """Fallback method to clean up memories if bulk delete fails."""
-                    try:
-                        from mirix.services.episodic_memory_manager import EpisodicMemoryManager
-                        from mirix.services.semantic_memory_manager import SemanticMemoryManager
-                        from mirix.services.procedural_memory_manager import ProceduralMemoryManager
-                        from mirix.services.resource_memory_manager import ResourceMemoryManager
-                        from mirix.services.knowledge_vault_manager import KnowledgeVaultManager
-                        from mirix.services.message_manager import MessageManager
-
-                        client = self._client.client
-
-                        # Delete each memory type
-                        managers = [
-                            ("episodic", EpisodicMemoryManager()),
-                            ("semantic", SemanticMemoryManager()),
-                            ("procedural", ProceduralMemoryManager()),
-                            ("resource", ResourceMemoryManager()),
-                            ("knowledge_vault", KnowledgeVaultManager()),
-                            ("messages", MessageManager()),
-                        ]
-
-                        for name, manager in managers:
-                            try:
-                                count = await manager.delete_by_client_id(actor=client)
-                                logger.debug(f"[MIRIXAgent] Fallback deleted {count} {name} records")
-                            except Exception as e:
-                                logger.warning(f"[MIRIXAgent] Failed to delete {name}: {e}")
-
-                    except Exception as e:
-                        logger.error(f"[MIRIXAgent] Fallback cleanup failed: {e}")
-
-                self._run_async(cleanup_all_data())
-
-            except Exception as e:
-                logger.warning(f"[MIRIXAgent] API-based data cleanup failed: {e}")
-                import traceback
-                traceback.print_exc()
-
-        self._meta_agent = None
-        self._client = None
-        self._is_client_owner = False
-
-        # Force garbage collection to release all references
-        gc.collect()
-
-        # Brief pause to allow database operations to settle
-        time.sleep(0.3)
-
-        # Step 2: Clean up SQLite database files if they exist (for SQLite mode)
-        # This is a safety measure to ensure complete cleanup regardless of database type
-        self._cleanup_sqlite_files()
-
-        # Force garbage collection again after file cleanup
-        gc.collect()
-
-        # Step 3: Reinitialize MIRIX with fresh client and agent
-        try:
-            self._init_mirix()
-            logger.info("[MIRIXAgent] Successfully reinitialized MIRIX with fresh state")
         except Exception as e:
-            logger.error(f"[MIRIXAgent] Failed to reinitialize MIRIX: {e}")
+            logger.warning(f"[MIRIXAgent] Cleanup failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+        # Step 3: Recreate MetaAgent on the SAME client (no LocalClient recreation)
+        self._meta_agent = None
+
+        from mirix.schemas.llm_config import LLMConfig
+        llm_config = LLMConfig(
+            model=self.model,
+            model_endpoint_type=self._get_mirix_endpoint_type(self._provider),
+            model_endpoint=self._base_url,
+            context_window=self.max_context_tokens,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+        )
+        embedding_config = self._build_embedding_config()
+
+        try:
+            self._create_meta_agent(llm_config, embedding_config)
+            logger.info("[MIRIXAgent] Reset complete - fresh MetaAgent created on existing client")
+        except Exception as e:
+            logger.error(f"[MIRIXAgent] Failed to recreate MetaAgent: {e}")
             raise
 
-        logger.info("[MIRIXAgent] Reset complete - all memory data cleared for persona isolation")
-
-    def _cleanup_sqlite_files(self) -> None:
-        """Clean up SQLite database files if they exist.
-
-        This handles the case where MIRIX is configured to use SQLite instead of PostgreSQL.
-        It safely removes the SQLite database and all associated journal/WAL files.
-        """
+    async def _fallback_cleanup_memories(self) -> None:
+        """Fallback: delete memories individually if bulk delete fails."""
         try:
-            from pathlib import Path
-            mirix_dir = Path.home() / ".mirix"
-            sqlite_db_path = mirix_dir / "sqlite.db"
+            from mirix.services.episodic_memory_manager import EpisodicMemoryManager
+            from mirix.services.semantic_memory_manager import SemanticMemoryManager
+            from mirix.services.procedural_memory_manager import ProceduralMemoryManager
+            from mirix.services.resource_memory_manager import ResourceMemoryManager
+            from mirix.services.knowledge_vault_manager import KnowledgeVaultManager
+            from mirix.services.message_manager import MessageManager
 
-            if sqlite_db_path.exists():
-                import os
-                # Delete SQLite database and all associated files (journal, WAL, SHM)
-                for suffix in ['', '-journal', '-wal', '-shm']:
-                    db_file = Path(str(sqlite_db_path) + suffix)
-                    if db_file.exists():
-                        try:
-                            os.remove(db_file)
-                            logger.info(f"[MIRIXAgent] Deleted SQLite file: {db_file}")
-                        except Exception as e:
-                            logger.warning(f"[MIRIXAgent] Failed to delete {db_file}: {e}")
-            else:
-                logger.debug("[MIRIXAgent] No SQLite database found (using PostgreSQL mode)")
-
+            client = self._client.client
+            managers = [
+                ("episodic", EpisodicMemoryManager()),
+                ("semantic", SemanticMemoryManager()),
+                ("procedural", ProceduralMemoryManager()),
+                ("resource", ResourceMemoryManager()),
+                ("knowledge_vault", KnowledgeVaultManager()),
+                ("messages", MessageManager()),
+            ]
+            for name, manager in managers:
+                try:
+                    count = await manager.delete_by_client_id(actor=client)
+                    logger.debug(f"[MIRIXAgent] Fallback deleted {count} {name} records")
+                except Exception as e:
+                    logger.warning(f"[MIRIXAgent] Failed to delete {name}: {e}")
         except Exception as e:
-            logger.warning(f"[MIRIXAgent] SQLite cleanup error: {e}")
+            logger.error(f"[MIRIXAgent] Fallback cleanup failed: {e}")
+
 
     def cleanup(self) -> None:
         """Full cleanup of MIRIX resources (call when completely done with agent).
@@ -1095,12 +863,9 @@ class MIRIXAgent(BaseAgent):
             "retrieve_num": self.retrieve_num,
             "memorize_chunk_tokens": self.memorize_chunk_tokens,
             "memorize_chunk_overlap_tokens": self.memorize_chunk_overlap_tokens,
-            "query_memory_item_tokens": self.query_memory_item_tokens,
-            "query_memory_context_tokens": self.query_memory_context_tokens,
             "max_input_tokens": self.max_input_tokens,
             "max_question_tokens": self.max_question_tokens,
             "max_context_tokens": self.max_context_tokens,
-            "use_native_query": self.use_native_query,
             "meta_agent_id": self._meta_agent.id if self._meta_agent else None,
             "mirix_input_tokens": self._mirix_input_tokens,
             "mirix_output_tokens": self._mirix_output_tokens,

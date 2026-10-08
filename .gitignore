@@ -3,6 +3,7 @@
 /exp_results/
 /logs/
 /results/
+/data/
 
 # Environment and secrets
 .env
@@ -53,8 +54,11 @@ env/
 /tests/
 /docker/
 /.serena/
-/.spec-workflow/
+.spec-workflow/
 /list/
+# Local embedding model weights (referenced by configs as relative "models/<name>").
+# No trailing slash: matches the directory AND a symlink to it.
+/models
 
 # Runtime artifacts
 /.memos/
@@ -63,5 +67,10 @@ env/
 # Logs
 *.log
 
-/methods/q2q_agent.py
-/configs/method_config/q2q_gpt-5.1.yaml
+# Private/unreleased method implementations
+/methods/q2q_v1_agent.py
+
+# Local-only iteration / verification helpers (not part of the release)
+/scripts/run_iter.sh
+/methods/MIRIX/evals/clear_records.py
+/methods/MIRIX/run_client_auto_dream.py

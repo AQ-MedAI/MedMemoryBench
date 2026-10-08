@@ -421,86 +421,6 @@ class AsyncLlamaIndexEmbeddingAdapter:
         return await self._model.aget_text_embedding(text)
 
 
-class LocalSentenceTransformerEmbedding:
-    """Local sentence-transformers embedding without requiring external API or TEI server.
-
-    This class loads and runs sentence-transformers models directly in Python,
-    wrapping the synchronous encode() call in asyncio.to_thread() for async compatibility.
-    """
-
-    def __init__(
-        self,
-        model_name_or_path: str,
-        device: Optional[str] = None,
-        langfuse_model: Optional[str] = None,
-        **kwargs: Any,
-    ):
-        """
-        Initialize local sentence-transformers embedding model.
-
-        Args:
-            model_name_or_path: HuggingFace model name or local path
-                Examples: "all-MiniLM-L6-v2", "BAAI/bge-small-zh-v1.5", "/path/to/local/model"
-            device: Device to run model on ("cuda", "cpu", "mps", or None for auto)
-            langfuse_model: Model name for Langfuse tracing (optional)
-        """
-        try:
-            from sentence_transformers import SentenceTransformer
-        except ImportError:
-            raise ImportError(
-                "sentence-transformers is required for local embedding. "
-                "Install it with: pip install sentence-transformers"
-            )
-
-        self.model_name = model_name_or_path
-        self._langfuse_model = langfuse_model
-
-        # Determine device
-        if device is None:
-            import torch
-            if torch.cuda.is_available():
-                device = "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                device = "mps"
-            else:
-                device = "cpu"
-
-        logger.info(f"Loading sentence-transformers model: {model_name_or_path} on device: {device}")
-        self._model = SentenceTransformer(model_name_or_path, device=device)
-        self._device = device
-        logger.info(f"Sentence-transformers model loaded successfully. Embedding dim: {self._model.get_sentence_embedding_dimension()}")
-
-    def _encode_sync(self, text: str) -> List[float]:
-        """Synchronous encode method."""
-        embedding = self._model.encode(text, convert_to_numpy=True, normalize_embeddings=True)
-        return embedding.tolist()
-
-    async def get_text_embedding(self, text: str) -> List[float]:
-        """
-        Get embedding for text using local sentence-transformers model.
-
-        This wraps the synchronous encode() in asyncio.to_thread() to avoid
-        blocking the event loop.
-        """
-        import asyncio
-
-        async def _do_embedding():
-            # Run synchronous model.encode() in a thread pool
-            return await asyncio.to_thread(self._encode_sync, text)
-
-        if is_embedding_tracing_enabled():
-            return await traced_embedding_with_retry(
-                model=self._langfuse_model or self.model_name,
-                provider="local",
-                text=text,
-                embedding_func=_do_embedding,
-                endpoint=None,
-            )
-        else:
-            # For local models, we don't need retry logic as there's no network
-            return await _do_embedding()
-
-
 async def query_embedding(embedding_model, query_text: str):
     """Generate padded embedding for querying database"""
     query_vec = await embedding_model.get_text_embedding(query_text)
@@ -520,9 +440,12 @@ async def embedding_model(config: EmbeddingConfig, user_id: Optional[uuid.UUID] 
     if endpoint_type == "openai":
         from mirix.services.provider_manager import ProviderManager
 
-        # Check for database-stored API key first, fall back to model_settings
-        override_key = await ProviderManager().get_openai_override_key()
-        api_key = override_key if override_key else model_settings.openai_api_key
+        if config.api_key:
+            api_key = config.api_key
+        else:
+            # Check for database-stored API key first, fall back to model_settings
+            override_key = await ProviderManager().get_openai_override_key()
+            api_key = override_key if override_key else model_settings.openai_api_key
 
         # Use direct OpenAI SDK if auth_provider is configured
         if hasattr(config, "auth_provider") and config.auth_provider:
@@ -545,8 +468,11 @@ async def embedding_model(config: EmbeddingConfig, user_id: Optional[uuid.UUID] 
 
         from mirix.services.provider_manager import ProviderManager
 
-        override_key = await ProviderManager().get_gemini_override_key()
-        api_key = override_key if override_key else model_settings.gemini_api_key
+        if config.api_key:
+            api_key = config.api_key
+        else:
+            override_key = await ProviderManager().get_gemini_override_key()
+            api_key = override_key if override_key else model_settings.gemini_api_key
 
         model = GoogleGenAIEmbedding(
             model_name=config.embedding_model,
@@ -599,17 +525,6 @@ async def embedding_model(config: EmbeddingConfig, user_id: Optional[uuid.UUID] 
             langfuse_model=config.langfuse_model,
         )
         return model
-
-    elif endpoint_type == "local":
-        # Local sentence-transformers model (no API required)
-        # embedding_model should be the model name or path, e.g., "all-MiniLM-L6-v2"
-        # embedding_endpoint can optionally specify device (e.g., "cuda", "cpu", "mps")
-        device = config.embedding_endpoint if config.embedding_endpoint else None
-        return LocalSentenceTransformerEmbedding(
-            model_name_or_path=config.embedding_model,
-            device=device,
-            langfuse_model=config.langfuse_model,
-        )
 
     else:
         raise ValueError(f"Unknown endpoint type {endpoint_type}")

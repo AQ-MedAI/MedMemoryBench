@@ -1,0 +1,61 @@
+dataset_name: "longmemeval_v2"
+description: "LongMemEval-V2 - Web Agent Trajectory Memory Evaluation Benchmark"
+language: "en"
+
+data:
+  root_dir: "data/longmemeval-v2/data/longmemeval-v2"
+
+evaluation:
+  mode: "independent"
+  # web or enterprise
+  domain: "web"
+  # small (100 trajectories per question) or medium (500)
+  tier: "small"
+  # Token budget per memory-build batch (adaptive batching)
+  max_batch_tokens: 50000
+  # Max characters of accessibility_tree per state (0 = disable truncation)
+  truncate_a11y: 1000
+  # Optional: cap on number of questions
+  max_questions: null
+  # Optional: explicit list of question ids to evaluate
+  question_ids: null
+
+query_types:
+  - name: "static-environment"
+    abbr: "SE"
+    metric: "longmemeval_v2"
+    description: "Static environment state recall"
+
+  - name: "static-environment-abs"
+    abbr: "SEA"
+    metric: "longmemeval_v2"
+    description: "Static environment state with abstention"
+
+  - name: "dynamic-environment"
+    abbr: "DE"
+    metric: "longmemeval_v2"
+    description: "Dynamic environment state tracking"
+
+  - name: "dynamic-environment-abs"
+    abbr: "DEA"
+    metric: "longmemeval_v2"
+    description: "Dynamic environment with abstention"
+
+  - name: "procedure"
+    abbr: "PR"
+    metric: "longmemeval_v2"
+    description: "Workflow and procedure knowledge"
+
+  - name: "procedure-abs"
+    abbr: "PRA"
+    metric: "longmemeval_v2"
+    description: "Procedure knowledge with abstention"
+
+  - name: "errors-gotchas"
+    abbr: "EG"
+    metric: "longmemeval_v2"
+    description: "Environment errors and gotchas"
+
+output:
+  save_intermediate: true
+  save_retrieved_context: true

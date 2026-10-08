@@ -158,12 +158,22 @@ class MethodConfig:
         if "embedding" in data:
             emb_data = data["embedding"]
             raw_model_path = emb_data.get("model_path")
+            raw_model = emb_data.get("model", "text-embedding-3-small")
             # Resolve relative model paths against PROJECT_ROOT
             if raw_model_path and not os.path.isabs(raw_model_path):
                 raw_model_path = str(PROJECT_ROOT / raw_model_path)
+            # provider="local" without model_path: `model` itself is the local path
+            if (
+                emb_data.get("provider") == "local"
+                and not raw_model_path
+                and isinstance(raw_model, str)
+                and raw_model.startswith("models/")
+                and not os.path.isabs(raw_model)
+            ):
+                raw_model = str(PROJECT_ROOT / raw_model)
             embedding_config = EmbeddingConfig(
                 provider=emb_data.get("provider", "openai"),
-                model=emb_data.get("model", "text-embedding-3-small"),
+                model=raw_model,
                 model_path=raw_model_path,
                 dim=emb_data.get("dim"),
                 api_key=emb_data.get("api_key"),
@@ -188,6 +198,7 @@ class MethodConfig:
         _path_keys = {
             "amem_embedding_model", "embedding_model_path", "model_path",
             "working_dir", "q2q_project_path",
+            "compressor_model", "nlp_inference_model", "pre_compressor_model_path",
         }
         resolved_agent_params = {}
         for k, v in raw_agent_params.items():

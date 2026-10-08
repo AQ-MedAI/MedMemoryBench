@@ -64,7 +64,19 @@ class LettaAgent(BaseAgent):
         self.retrieve_num = retrieve_num
         self.context_window = context_window
         self.embedding_model = embedding_model
-        self.embedding_model_path = embedding_model_path
+        # Resolve embedding_model_path to absolute path
+        if embedding_model_path and not os.path.isabs(embedding_model_path):
+            project_root = Path(__file__).resolve().parent.parent
+            # Try project root first, then parent of project root
+            for base in [project_root, project_root.parent]:
+                resolved = base / embedding_model_path
+                if resolved.exists():
+                    self.embedding_model_path = str(resolved)
+                    break
+            else:
+                self.embedding_model_path = embedding_model_path
+        else:
+            self.embedding_model_path = embedding_model_path
         self.embedding_dim = embedding_dim
         self.embedding_provider = embedding_provider
         self.embedding_chunk_size = int(kwargs.get("embedding_chunk_size", 300))
@@ -257,17 +269,11 @@ class LettaAgent(BaseAgent):
         name = f"medmemorybench_letta_ctx_{context_id}_{int(time.time())}"
         memory = self._ChatMemory(persona=self.memory_persona, human=self.memory_human)
 
-        agent_metadata = {
-            "retrieve_num": self.retrieve_num,
-            "embedding_chunk_size": self.embedding_chunk_size,
-        }
-
         state = self._client.create_agent(
             name=name,
             llm_config=self._build_llm_config(),
             embedding_config=self._build_embedding_config(),
             memory=memory,
-            metadata=agent_metadata,
         )
         agent_id = str(state.id)
         self._agent_ids[context_id] = agent_id
@@ -288,6 +294,57 @@ class LettaAgent(BaseAgent):
             except Exception as e:
                 logger.warning(f"Failed to delete agent {agent_id}: {e}")
             del self._agent_ids[context_id]
+
+    def _export_in_context_messages(self, agent_id: str) -> List[Dict[str, Any]]:
+        """Export the full in_context_messages (conversation buffer) for logging.
+
+        Args:
+            agent_id: The Letta agent ID
+
+        Returns:
+            List of serialized message dicts with role, content, created_at, etc.
+        """
+        try:
+            from letta.schemas.message import TextContent
+            messages = self._client.get_in_context_messages(agent_id)
+            exported = []
+            for msg in messages:
+                entry = {
+                    "role": msg.role,
+                    "created_at": msg.created_at.isoformat() if msg.created_at else None,
+                }
+                if msg.content:
+                    if len(msg.content) == 1:
+                        if isinstance(msg.content[0], TextContent):
+                            entry["content"] = msg.content[0].text
+                        else:
+                            entry["content"] = str(msg.content[0])
+                    else:
+                        parts = []
+                        for part in msg.content:
+                            if isinstance(part, TextContent):
+                                parts.append(part.text)
+                            else:
+                                parts.append(str(part))
+                        entry["content"] = parts
+                else:
+                    entry["content"] = None
+
+                if msg.tool_calls:
+                    entry["tool_calls"] = [
+                        {"id": tc.id, "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                        for tc in msg.tool_calls
+                    ]
+                if msg.name:
+                    entry["name"] = msg.name
+                if msg.tool_call_id:
+                    entry["tool_call_id"] = msg.tool_call_id
+
+                exported.append(entry)
+            return exported
+        except Exception as e:
+            logger.warning(f"Failed to export in_context_messages: {e}")
+            return [{"error": str(e)}]
 
     def _ensure_agent(self, context_id: int) -> str:
         """Ensure Letta agent exists for the given context_id.
@@ -537,6 +594,9 @@ class LettaAgent(BaseAgent):
         self._memory_chunks.append(text)
         self._is_initialized = True
 
+        # Export in_context_messages (conversation buffer) snapshot
+        in_context_messages_snapshot = self._export_in_context_messages(agent_id)
+
         return MemoryBuildResult(
             success=True,
             method="letta",
@@ -554,6 +614,7 @@ class LettaAgent(BaseAgent):
                 "internal_monologue": all_internal_monologue,
                 "usage": total_usage,
                 "chunks_processed": len(chunks),
+                "in_context_messages": in_context_messages_snapshot,
             },
         )
 
@@ -616,8 +677,9 @@ class LettaAgent(BaseAgent):
 
         # Extract retrieved memories from search function calls
         retrieved_memories = []
+        search_tool_names = {"archival_memory_search", "conversation_search", "conversation_search_date"}
         for func_call in parsed["function_calls"]:
-            if func_call["name"] == "archival_memory_search":
+            if func_call["name"] in search_tool_names:
                 args = func_call.get("arguments", {})
                 search_query = args.get("query", "") if isinstance(args, dict) else str(args)
                 search_results = func_call.get("return", "")
@@ -629,9 +691,12 @@ class LettaAgent(BaseAgent):
 
                 retrieved_memories.append({
                     "memory": truncated_results if truncated_results else f"Search: {search_query}",
-                    "type": "archival_memory_search",
+                    "type": func_call["name"],
                     "query": search_query,
                 })
+
+        # Export in_context_messages (conversation buffer) snapshot
+        in_context_messages_snapshot = self._export_in_context_messages(agent_id)
 
         return AgentResponse(
             output=parsed["assistant_message"],
@@ -644,6 +709,7 @@ class LettaAgent(BaseAgent):
                 "function_calls": parsed["function_calls"],
                 "internal_monologue": parsed["internal_monologue"],
                 "usage": parsed["usage"],
+                "in_context_messages": in_context_messages_snapshot,
             },
         )
 

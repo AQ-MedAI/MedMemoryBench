@@ -1,0 +1,54 @@
+dataset_name: "medmemorybench"
+language: "zh"
+
+data:
+  root_dir: "data/MedMemoryBench"
+  personas_file: null
+  sessions_pattern: "persona_{id}/eval/generated_dialogues.json"
+  queries_pattern: "persona_{id}/eval/generated_queries.json"
+  noise_file: "persona_{id}/eval/generated_dialogues_with_noise.json"
+
+evaluation:
+  mode: "independent"
+  persona_ids: [1, 2]
+  max_personas: null
+  max_sessions_per_persona: null
+
+  evaluation_interval: 10
+
+  inject_noise: false
+
+query_types:
+  - name: "entity_exact_match"
+    abbr: "EEM"
+    metric: "string_contain"
+    description: "实体精确匹配"
+
+  - name: "temporal_localization"
+    abbr: "TLA"
+    metric: "llm_judge"
+    description: "时间定位"
+
+  - name: "state_update"
+    abbr: "SUA"
+    metric: "llm_judge"
+    description: "状态更新"
+
+  - name: "multiple_choice"
+    abbr: "MQ"
+    metric: "option_match"
+    description: "多选题"
+
+  - name: "inference_generation"
+    abbr: "IG"
+    metric: "llm_judge"
+    description: "推理生成"
+
+  - name: "multi_hop_clinical_deduction"
+    abbr: "MCD"
+    metric: "llm_judge_mcd"
+    description: "多跳临床推理"
+
+output:
+  save_intermediate: true
+  save_retrieved_context: true

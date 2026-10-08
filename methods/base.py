@@ -58,6 +58,23 @@ class AgentResponse:
         }
 
 
+class _SafeTokenizer:
+    """Wrapper around tiktoken that allows special tokens as normal text."""
+
+    def __init__(self, tokenizer):
+        self._tokenizer = tokenizer
+
+    def encode(self, text: str, **kwargs) -> list:
+        kwargs.setdefault("disallowed_special", ())
+        return self._tokenizer.encode(text, **kwargs)
+
+    def decode(self, tokens, **kwargs):
+        return self._tokenizer.decode(tokens, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._tokenizer, name)
+
+
 class BaseAgent(ABC):
     """Base class for all memory agents."""
 
@@ -76,9 +93,10 @@ class BaseAgent(ABC):
         self.extra_params = kwargs
 
         try:
-            self._tokenizer = tiktoken.encoding_for_model(model)
+            base_tokenizer = tiktoken.encoding_for_model(model)
         except KeyError:
-            self._tokenizer = tiktoken.encoding_for_model("gpt-4o-mini")
+            base_tokenizer = tiktoken.encoding_for_model("gpt-4o-mini")
+        self._tokenizer = _SafeTokenizer(base_tokenizer)
 
         self._memory_chunks: List[str] = []
         self._is_initialized = False
@@ -97,6 +115,10 @@ class BaseAgent(ABC):
         **kwargs
     ) -> AgentResponse:
         """Query the agent."""
+        pass
+
+    def on_query_feedback(self, score: float, is_correct: bool, **kwargs) -> None:
+        """Receive evaluation feedback after a query. Default no-op."""
         pass
 
     def reset(self) -> None:

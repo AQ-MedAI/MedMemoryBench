@@ -348,6 +348,8 @@ class MemoryService:
             embedder_provider = "openai"
             embedder_base_url = None
             embedder_api_key = None
+            # Priority: externally specified > auto-detect from model name
+            vector_dimension_override = kwargs.get("vector_dimension", None)
             vector_dimension = 3072  # default for text-embedding-3-large
 
             try:
@@ -364,7 +366,7 @@ class MemoryService:
                     embedder_api_key = None
                     # Common local model dimensions
                     if "bge-small" in (embedder_model_name or "").lower():
-                        vector_dimension = 512
+                        vector_dimension = 384
                     elif "bge-base" in (embedder_model_name or "").lower():
                         vector_dimension = 768
                     elif "bge-large" in (embedder_model_name or "").lower():
@@ -385,7 +387,7 @@ class MemoryService:
                     embedder_model_name = self.embedding_provider.model_name
                     embedder_backend = "sentence_transformer"
                     if "bge-small" in (embedder_model_name or "").lower():
-                        vector_dimension = 512
+                        vector_dimension = 384
                     elif "bge-base" in (embedder_model_name or "").lower():
                         vector_dimension = 768
                     elif "bge-large" in (embedder_model_name or "").lower():
@@ -399,6 +401,10 @@ class MemoryService:
                         getattr(self.embedding_provider, "model", None)
                         or "text-embedding-3-large"
                     )
+
+            # External override takes highest priority
+            if vector_dimension_override is not None:
+                vector_dimension = int(vector_dimension_override)
 
             # Build embedder config based on backend type
             if embedder_backend == "sentence_transformer":

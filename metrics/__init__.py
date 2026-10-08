@@ -6,6 +6,9 @@ from .base import BaseMetric, MetricResult
 from .string_match import StringContainMetric, ExactMatchMetric, OptionMatchMetric
 from .llm_judge import LLMJudgeMetric, LLMJudgeMCDMetric
 from .locomo_metrics import LoCoMoF1Metric, LoCoMoAdversarialMetric, LoCoMoTemporalMetric
+from .longmemeval_metrics import LongMemEvalJudgeMetric
+from .ama_bench_metrics import AMABenchJudgeMetric
+from .longmemeval_v2_metrics import LongMemEvalV2Metric
 
 
 METRIC_REGISTRY: Dict[str, Type[BaseMetric]] = {
@@ -17,6 +20,9 @@ METRIC_REGISTRY: Dict[str, Type[BaseMetric]] = {
     "locomo_f1": LoCoMoF1Metric,
     "locomo_adversarial": LoCoMoAdversarialMetric,
     "locomo_temporal": LoCoMoTemporalMetric,
+    "longmemeval_judge": LongMemEvalJudgeMetric,
+    "ama_bench_judge": AMABenchJudgeMetric,
+    "longmemeval_v2": LongMemEvalV2Metric,
 }
 
 
@@ -35,6 +41,26 @@ class MetricsCalculator:
         "temporal": "locomo_f1",
         "open_domain": "locomo_f1",
         "adversarial": "locomo_adversarial",
+        # LongMemEval types
+        "single-session-user": "longmemeval_judge",
+        "single-session-assistant": "longmemeval_judge",
+        "single-session-preference": "longmemeval_judge",
+        "multi-session": "longmemeval_judge",
+        "temporal-reasoning": "longmemeval_judge",
+        "knowledge-update": "longmemeval_judge",
+        # AMA-Bench QA types (all use binary yes/no LLM-as-Judge)
+        "recall": "ama_bench_judge",
+        "causal_inference": "ama_bench_judge",
+        "state_updating": "ama_bench_judge",
+        "state_abstraction": "ama_bench_judge",
+        # LongMemEval-V2 types
+        "static-environment": "longmemeval_v2",
+        "static-environment-abs": "longmemeval_v2",
+        "dynamic-environment": "longmemeval_v2",
+        "dynamic-environment-abs": "longmemeval_v2",
+        "procedure": "longmemeval_v2",
+        "procedure-abs": "longmemeval_v2",
+        "errors-gotchas": "longmemeval_v2",
     }
 
     def __init__(self, custom_mapping: Optional[Dict[str, str]] = None, dataset: str = "medmemorybench",
@@ -55,7 +81,7 @@ class MetricsCalculator:
             metric_class = METRIC_REGISTRY.get(metric_name)
             if metric_class is None:
                 raise ValueError(f"Unknown metric: {metric_name}, available: {list(METRIC_REGISTRY.keys())}")
-            if metric_name in ("llm_judge", "llm_judge_mcd"):
+            if metric_name in ("llm_judge", "llm_judge_mcd", "longmemeval_judge", "ama_bench_judge"):
                 self._metric_instances[metric_name] = metric_class(
                     dataset=self._dataset,
                     judge_model=self._judge_model,
@@ -196,6 +222,9 @@ __all__ = [
     "LoCoMoF1Metric",
     "LoCoMoAdversarialMetric",
     "LoCoMoTemporalMetric",
+    "LongMemEvalJudgeMetric",
+    "AMABenchJudgeMetric",
+    "LongMemEvalV2Metric",
     "MetricsCalculator",
     "MetricsAggregator",
     "METRIC_REGISTRY",

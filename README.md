@@ -1,4 +1,4 @@
-# MedMemoryBench: Benchmarking Agent Memory in Personalized Healthcare
+# MedMemoryBench: Benchmarking Agent Memory in Personalized Healthcare [NIPS'26]
 
 <div align="center">
   <img src="figs/4examples.png" alt="MedMemoryBench overview — four key challenges in medical memory evaluation" width="800"/>
@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-｜🤗 <a href="https://huggingface.co/datasets/Cyan27/MedMemoryBench" target="_blank">HuggingFace Dataset</a> ｜
+｜🤗 <a href="https://huggingface.co/datasets/AQ-MedAI/MedMemoryBench" target="_blank">HuggingFace Dataset</a> ｜
 📄 <a href="https://arxiv.org/abs/2605.11814">Arxiv Preprint</a> ｜
 🌐 <a href="README_ZH.md">中文</a> ｜
 </p>
@@ -18,6 +18,7 @@
   <img src="https://img.shields.io/badge/version-1.0.0-blue" alt="version"/>
   <img src="https://img.shields.io/badge/python-%3E%3D3.10-blue" alt="python"/>
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="license"/>
+  <img src="https://img.shields.io/badge/NeurIPS-2026-8A2BE2" alt="NeurIPS 2026"/>
 </p>
 
 ---
@@ -28,6 +29,7 @@
 
 - [News](#-news)
 - [Features](#-features)
+- [Datasets](#-datasets)
 - [Project Structure](#-project-structure)
 - [Quick Start](#-quick-start)
 - [Configuration](#-configuration)
@@ -38,8 +40,9 @@
 
 ## 📰 News
 
+- **[2026.09]** 🎉 MedMemoryBench is accepted to **NeurIPS 2026**!
 - **[2026.05]** MedMemoryBench v1.0 is officially released — dataset, evaluation framework, and 14 memory method baselines.
-- **[2026.05]** Dataset available on [HuggingFace](https://huggingface.co/datasets/Cyan27/MedMemoryBench).
+- **[2026.05]** Dataset available on [HuggingFace](https://huggingface.co/datasets/AQ-MedAI/MedMemoryBench).
 
 ## ✨ Features
 
@@ -85,6 +88,29 @@
 </tr>
 </table>
 
+### Query Types
+
+| Type | Count | Description |
+|:-----|:-----:|:------------|
+| `entity_exact_match` | 400 | Exact recall of medical entities |
+| `temporal_localization` | 400 | Time-related clinical reasoning |
+| `multiple_choice` | 398 | Multi-option medical QA |
+| `inference_generation` | 397 | Open-ended clinical inference |
+| `state_update` | 200 | Tracking patient state evolution |
+| `multi_hop_clinical_deduction` | 191 | Multi-hop clinical deduction |
+
+## 📦 Datasets
+
+Every dataset is loaded from a fixed path under `data/`, declared by the `data.root_dir` field of its config in `configs/dataset_config/`. **Place each dataset at exactly the path below** — the loader resolves `data/` relative to the repository root and does not search elsewhere.
+
+| Dataset | Source | Expected local path | Config file | Size |
+|:--------|:-------|:--------------------|:------------|:-----|
+| **MedMemoryBench** (zh) | 🤗 [AQ-MedAI/MedMemoryBench](https://huggingface.co/datasets/AQ-MedAI/MedMemoryBench) | `data/MedMemoryBench/` | `medmemorybench.yaml` | ~598 MB |
+| **MedMemoryBench** (en) | 🤗 [AQ-MedAI/MedMemoryBench](https://huggingface.co/datasets/AQ-MedAI/MedMemoryBench) | `data/MedMemoryBench_EN/` | `medmemorybench.yaml` (`root_dir`) | ~443 MB |
+| **LoCoMo** | 🐙 [snap-research/locomo](https://github.com/snap-research/locomo) | `data/locomo/` | `locomo.yaml` | ~18 MB |
+| **AMA-Bench** | 🐙 [AMA-Bench/AMA-Hub](https://github.com/AMA-Bench/AMA-Hub) | `data/AMA-Hub/` | `ama_bench.yaml` | ~48 MB |
+| LongMemEval-V2 (optional) | 🐙 [LongMemEval-V2](https://github.com/xiaowu0162/LongMemEval-V2) | `data/longmemeval-v2/` | `longmemeval_v2.yaml` | — |
+
 ## 📁 Project Structure
 
 <details>
@@ -117,7 +143,8 @@ MedMemoryBench/
 │   │   └── ...                   # + qwen3 variants
 │   └── dataset_config/
 │       ├── medmemorybench.yaml
-│       └── locomo.yaml
+│       ├── locomo.yaml
+│       └── ama_bench.yaml
 │
 ├── methods/                      # Memory method implementations
 │   ├── base.py                   # BaseAgent abstract class
@@ -180,10 +207,11 @@ MedMemoryBench/
 │   ├── run_eval.sh
 │   └── mirix-services.sh
 │
-├── data/                         # Datasets (Git LFS)
-│   ├── MedMemoryBench/           # Chinese, ~598 MB
-│   ├── MedMemoryBench_EN/        # English, ~443 MB
-│   └── locomo/                   # LoCoMo, ~18 MB
+├── data/                         # Datasets (not tracked; see "Datasets" section)
+│   ├── MedMemoryBench/           # MedMemoryBench, Chinese, ~598 MB
+│   ├── MedMemoryBench_EN/        # MedMemoryBench, English, ~443 MB
+│   ├── locomo/                   # LoCoMo upstream repo, ~18 MB
+│   └── AMA-Hub/                  # AMA-Bench upstream repo, ~48 MB
 │
 ├── generation/                   # Dataset generation pipeline (sub-project)
 ├── outputs/                      # Evaluation outputs (gitignored)
@@ -198,18 +226,12 @@ MedMemoryBench/
 
 ### 1. Clone the Repository
 
-> **Note:** This repository ships datasets via **Git LFS**. Please install it before cloning.
-
 ```bash
-# Install Git LFS (skip if already installed)
-brew install git-lfs                  # macOS
-sudo apt-get install git-lfs          # Ubuntu/Debian
-# Windows: https://git-lfs.github.com/
-
-git lfs install
 git clone https://github.com/AQ-MedAI/MedMemoryBench.git
 cd MedMemoryBench
 ```
+
+> **Note:** `data/` is not tracked by Git. After cloning, follow [Datasets](#-datasets) to fetch MedMemoryBench, LoCoMo, and AMA-Bench into `data/` before running any evaluation.
 
 ### 2. Environment Setup
 
@@ -276,10 +298,6 @@ EMBEDDING_PROVIDER=openai
 LETTA_DIR=.tmp/letta_runtime
 ```
 
-> **Tips:**
-> - For BigModel, set `BIGMODEL_API_KEY` / `BIGMODEL_BASE_URL` first; the framework maps them to OpenAI-compatible settings internally.
-> - `LETTA_DIR` is recommended to avoid stale SQLite metadata from previous Letta runs.
-
 ### 4. Run Evaluation
 
 **Via shell script:**
@@ -299,6 +317,10 @@ python main.py -m embedding_rag_gpt-5.1 -d medmemorybench --dry-run
 
 # Resume from checkpoint
 python main.py -m embedding_rag_gpt-5.1 -d medmemorybench --resume
+
+# List available methods / datasets
+python main.py --list-methods
+python main.py --list-datasets
 ```
 
 <!-- > 💡 **Extending with a new method?** See [`methods/README.md`](methods/README.md) for the step-by-step guide. -->
@@ -334,14 +356,14 @@ embedding:
 
 ### Dataset Configuration
 
-Dataset configs live under `configs/dataset_config/`:
+Dataset configs live under `configs/dataset_config/`. Each one pins the dataset to a fixed location under `data/` via `root_dir` (see [Datasets](#-datasets)):
 
 ```yaml
 # configs/dataset_config/medmemorybench.yaml
 
 dataset_name: "medmemorybench"
 description: "Medical dialogue memory evaluation dataset"
-language: "zh"
+language: "zh"                      # metadata only; switch datasets via root_dir, not this field
 
 data:
   root_dir: "data/MedMemoryBench"
@@ -360,6 +382,15 @@ query_types:
   # ... more types
 ```
 
+```yaml
+# configs/dataset_config/locomo.yaml          # configs/dataset_config/ama_bench.yaml
+data:                                         data:
+  root_dir: "data/locomo/data"                  root_dir: "data/AMA-Hub/dataset/test"
+  data_file: "locomo10.json"                    data_file: "open_end_qa_set.jsonl"
+```
+
+> Point `root_dir` at a different location if you store the datasets elsewhere on disk, e.g. on a large data volume. Only the directory holding the file named in `data_file` (or the `persona_{id}/eval/` tree for MedMemoryBench) needs to match.
+
 ## 📄 Output
 
 Evaluation results are saved under `outputs/<method>_<model>/`:
@@ -377,10 +408,10 @@ outputs/
 If you find MedMemoryBench useful in your research, please consider citing our work:
 
 ```bibtex
-@article{wang2026medmemorybench,
+@inproceedings{wang2026medmemorybench,
   title={MedMemoryBench: Benchmarking Agent Memory in Personalized Healthcare},
   author={Yihao Wang and Haoran Xu and Renjie Gu and Yixuan Ye and Xinyi Chen and Xinyu Mu and Yuan Gao and Chunxiao Guo and Peng Wei and Jinjie Gu and Huan Li and Ke Chen and Lidan Shou},
-  journal={arXiv preprint arXiv:2605.11814},
+  booktitle={Advances in Neural Information Processing Systems (NeurIPS)},
   year={2026}
 }
 ```

@@ -1,0 +1,50 @@
+dataset_name: "locomo"
+description: "LoCoMo small-sample config for fast iteration"
+language: "en"
+
+data:
+  root_dir: "data/locomo/data"
+  data_file: "locomo10.json"
+
+evaluation:
+  mode: "independent"
+  sample_ids: null
+  max_samples: 2
+  include_images: true
+  category_filter: null
+  memory_chunk_size: 10240
+
+query_types:
+  - name: "single_hop"
+    category: 4
+    abbr: "SH"
+    metric: "locomo_f1"
+    description: "Single-hop factual retrieval"
+
+  - name: "multi_hop"
+    category: 1
+    abbr: "MH"
+    metric: "locomo_f1"
+    description: "Multi-hop information integration"
+
+  - name: "temporal"
+    category: 2
+    abbr: "TMP"
+    metric: "locomo_f1"
+    description: "Temporal reasoning"
+
+  - name: "open_domain"
+    category: 3
+    abbr: "OD"
+    metric: "locomo_f1"
+    description: "Open-domain reasoning"
+
+  - name: "adversarial"
+    category: 5
+    abbr: "ADV"
+    metric: "locomo_adversarial"
+    description: "Adversarial questions"
+
+output:
+  save_intermediate: true
+  save_retrieved_context: true

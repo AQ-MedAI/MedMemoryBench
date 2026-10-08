@@ -1,4 +1,5 @@
 import json
+import re
 import warnings
 from typing import TYPE_CHECKING, AsyncGenerator, List, Optional, Union
 
@@ -56,6 +57,37 @@ from mirix.utils import (
 OPENAI_SSE_DONE = "[DONE]"
 
 
+def _requires_max_completion_tokens(model: Optional[str]) -> bool:
+    """
+    Determine if a model requires max_completion_tokens instead of max_tokens.
+
+    Models requiring max_completion_tokens:
+    - gpt-5.x series (e.g., gpt-5.1, gpt-5.0)
+    - o1 series (e.g., o1-preview, o1-mini)
+    - o3 series (e.g., o3-mini)
+
+    Args:
+        model: Model name string
+
+    Returns:
+        True if model requires max_completion_tokens, False otherwise
+    """
+    if not model:
+        return False
+
+    model_lower = model.lower()
+
+    # Check for gpt-5.x series
+    if re.match(r'^gpt-5\.\d+', model_lower):
+        return True
+
+    # Check for o1/o3 series
+    if model_lower.startswith(('o1-', 'o1', 'o3-', 'o3')):
+        return True
+
+    return False
+
+
 async def openai_get_model_list(
     url: str,
     api_key: Union[str, None],
@@ -111,6 +143,16 @@ def build_openai_chat_completions_request(
         warnings.warn(f"Model type not set in llm_config: {llm_config.model_dump_json(indent=4)}")
         model = None
 
+    # Determine which token limit parameter to use based on model
+    # Models like gpt-5.x, o1, o3 require max_completion_tokens instead of max_tokens
+    uses_max_completion_tokens = _requires_max_completion_tokens(model)
+    token_params = {}
+    if max_tokens is not None:
+        if uses_max_completion_tokens:
+            token_params["max_completion_tokens"] = max_tokens
+        else:
+            token_params["max_tokens"] = max_tokens
+
     if use_tool_naming:
         if function_call is None:
             tool_choice = None
@@ -126,7 +168,7 @@ def build_openai_chat_completions_request(
             messages=openai_message_list,
             tools=[Tool(type="function", function=f) for f in functions] if functions else None,
             tool_choice=tool_choice,
-            max_tokens=max_tokens,
+            **token_params,
         )
     else:
         data = ChatCompletionRequest(
@@ -134,7 +176,7 @@ def build_openai_chat_completions_request(
             messages=openai_message_list,
             functions=functions,
             function_call=function_call,
-            max_tokens=max_tokens,
+            **token_params,
         )
         # https://platform.openai.com/docs/guides/text-generation/json-mode
         # only supported by gpt-4o, gpt-4-turbo, or gpt-3.5-turbo

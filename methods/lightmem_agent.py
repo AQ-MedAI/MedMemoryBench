@@ -14,8 +14,139 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Literal
 
+import numpy as np
+
 from .base import BaseAgent, MemoryBuildResult, AgentResponse
 from utils.llm_client import create_llm_client, format_messages, BaseLLMClient, get_usage_tracker
+
+
+# ============ Official Answer Prompts (from LightMem experiments) ============
+
+# LoCoMo: from experiments/locomo/prompts.py ANSWER_PROMPT
+LOCOMO_ANSWER_PROMPT = """You are an intelligent memory assistant tasked with retrieving accurate information from conversation memories.
+
+# CONTEXT:
+You have access to memories from two speakers in a conversation. These memories contain
+timestamped information that may be relevant to answering the question.
+
+# INSTRUCTIONS:
+1. Carefully analyze all provided memories from both speakers
+2. Pay special attention to the timestamps to determine the answer
+3. If the question asks about a specific event or fact, look for direct evidence in the memories
+4. If the memories contain contradictory information, prioritize the most recent memory
+5. If there is a question about time references (like "last year", "two months ago", etc.),
+   calculate the actual date based on the memory timestamp. For example, if a memory from
+   4 May 2022 mentions "went to India last year," then the trip occurred in 2021.
+6. Always convert relative time references to specific dates, months, or years. For example,
+   convert "last year" to "2022" or "two months ago" to "March 2023" based on the memory
+   timestamp. Ignore the reference while answering the question.
+7. Focus only on the content of the memories from both speakers. Do not confuse character
+   names mentioned in memories with the actual users who created those memories.
+8. The answer should be less than 5-6 words.
+
+# APPROACH (Think step by step):
+1. First, examine all memories that contain information related to the question
+2. Examine the timestamps and content of these memories carefully
+3. Look for explicit mentions of dates, times, locations, or events that answer the question
+4. If the answer requires calculation (e.g., converting relative time references), show your work
+5. Formulate a precise, concise answer based solely on the evidence in the memories
+6. Double-check that your answer directly addresses the question asked
+7. Ensure your final answer is specific and avoids vague time references
+
+Memories for user {speaker_1_name}:
+
+{speaker_1_memories}
+
+Memories for user {speaker_2_name}:
+
+{speaker_2_memories}
+
+Question: {question}
+
+Answer:"""
+
+# LongMemEval: from experiments/longmemeval/run_lightmem_gpt.py
+LONGMEMEVAL_ANSWER_PROMPT = """You are a helpful assistant.
+
+Question time:{question_date} and question:{question}
+Please answer the question based on the following memories: {memories}"""
+
+# MedMemoryBench: adapted from LoCoMo prompt for medical dialogues
+MEDMEMORYBENCH_ANSWER_PROMPT = """你是一个智能医疗记忆助手，负责从对话记忆中准确检索信息来回答问题。
+
+# 背景:
+你可以访问患者和医生之间对话的记忆。这些记忆包含带有时间戳的信息，可能与回答问题相关。
+
+# 指令:
+1. 仔细分析患者和医生的所有记忆
+2. 特别注意时间戳以确定答案
+3. 如果问题询问特定事件或事实，请在记忆中寻找直接证据
+4. 如果记忆包含矛盾信息，优先使用最近的记忆
+5. 如果有时间参照问题（如"去年"、"两个月前"等），根据记忆时间戳计算实际日期
+6. 始终将相对时间转换为具体日期、月份或年份
+7. 仅关注记忆中的内容，基于证据回答
+8. 回答应简洁直接
+
+# 思考步骤:
+1. 找出与问题相关的所有记忆
+2. 仔细检查这些记忆的时间戳和内容
+3. 寻找能回答问题的日期、时间、地点或事件的明确提及
+4. 如果需要计算，展示推理过程
+5. 根据记忆中的证据给出精确答案
+6. 确保答案直接回应所问问题
+
+患者的记忆:
+
+{speaker_1_memories}
+
+医生的记忆:
+
+{speaker_2_memories}
+
+问题: {question}
+
+回答:"""
+
+
+# ============ Utility Functions (from official retrievers.py) ============
+
+def _cosine_similarity(v1, v2) -> float:
+    a = np.array(v1)
+    b = np.array(v2)
+    na = np.linalg.norm(a)
+    nb = np.linalg.norm(b)
+    if na == 0 or nb == 0:
+        return 0.0
+    return float(np.dot(a, b) / (na * nb))
+
+
+def _format_related_memories(related: List[Dict[str, Any]]) -> str:
+    """Format memories exactly as official search_locomo.py format_related_memories()."""
+    out: List[str] = []
+    for item in related:
+        payload = item.get('payload', {}) if isinstance(item, dict) else {}
+        if not payload and isinstance(item, str):
+            out.append(item)
+            continue
+
+        time_stamp = payload.get('time_stamp') or item.get('time_stamp') or ''
+        weekday = payload.get('weekday') or item.get('weekday') or ''
+        memory = (payload.get('memory') or payload.get('original_memory')
+                  or payload.get('compressed_memory') or item.get('memory') or '')
+
+        if time_stamp:
+            try:
+                dt = datetime.fromisoformat(time_stamp.replace('Z', '+00:00'))
+                formatted_date = dt.strftime("%d %B %Y")
+                formatted = f"[Memory recorded on: {formatted_date}, {weekday}]\n{memory}"
+            except (ValueError, TypeError):
+                formatted = f"[{time_stamp} {weekday}]\n{memory}"
+        else:
+            formatted = memory
+
+        out.append(formatted.strip())
+
+    return "\n\n".join(out)
 
 
 class TrackedMemoryManager:
@@ -71,14 +202,14 @@ class TrackedMemoryManager:
     ) -> tuple:
         """
         Generate a response using our tracked llm_client.
-        Returns (parsed_response, usage_info) to match LightMem's interface.
+        Returns (parsed_response, usage_info) to match LightMem's OpenaiManager interface.
         """
-        # Build kwargs for special parameters
         kwargs = {}
         if response_format:
             kwargs["response_format"] = response_format
+        # Pass top_p to match official OpenaiManager behavior
+        kwargs["top_p"] = self.top_p
 
-        # Call through our tracked client
         response = self.llm_client.chat(
             messages=messages,
             temperature=self.temperature,
@@ -344,15 +475,21 @@ class LightMemAgent(BaseAgent):
         provider: str = "openai",
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
+        # Dataset awareness
+        dataset_name: str = "locomo",
         # LightMem specific parameters
         retrieve_num: int = 5,
-        pre_compress: bool = False,
+        pre_compress: bool = True,
         topic_segment: bool = True,
         index_strategy: str = "embedding",
         retrieve_strategy: str = "embedding",
         update_mode: str = "offline",
         extraction_mode: str = "flat",
         messages_use: str = "user_only",
+        # Pre-compressor configuration
+        pre_compressor_model_path: Optional[str] = None,
+        compress_rate: float = 0.6,
+        precomp_topic_shared: bool = True,
         # Embedding configuration
         embedding_provider: str = "local",
         embedding_model: str = "BAAI/bge-small-zh-v1.5",
@@ -370,6 +507,9 @@ class LightMemAgent(BaseAgent):
     ):
         super().__init__(model, temperature, max_tokens, **kwargs)
 
+        # Dataset name for prompt selection
+        self._dataset_name = dataset_name
+
         # Save configuration
         self.retrieve_num = retrieve_num
         self.pre_compress = pre_compress
@@ -379,6 +519,10 @@ class LightMemAgent(BaseAgent):
         self.update_mode = update_mode
         self.extraction_mode = extraction_mode
         self.messages_use = messages_use
+        self._effective_messages_use = self._resolve_messages_use(messages_use)
+        self.pre_compressor_model_path = pre_compressor_model_path
+        self.compress_rate = compress_rate
+        self.precomp_topic_shared = precomp_topic_shared
         self.embedding_provider = embedding_provider
         self.embedding_model = embedding_model
         self.embedding_model_path = embedding_model_path
@@ -440,14 +584,30 @@ class LightMemAgent(BaseAgent):
         self._LightMemory = LightMemory
         self._lightmem_modules_loaded = True
 
+    def _resolve_messages_use(self, config_value: str) -> str:
+        """
+        Resolve effective messages_use based on dataset.
+
+        LoCoMo official puts ALL speaker content into role="user" (assistant is empty),
+        so "user_only" captures everything. For MedMemoryBench and LongMemEval, the adapter
+        maps doctor/assistant content to role="assistant" with real content, so "hybrid"
+        is needed to retain all information during extraction.
+        """
+        dataset = self._dataset_name.lower() if self._dataset_name else ""
+        if dataset == "locomo":
+            return "user_only"
+        elif dataset in ("medmemorybench", "longmemeval"):
+            return "hybrid"
+        return config_value
+
     def _build_lightmem_config(self) -> Dict[str, Any]:
-        """Build LightMem configuration dictionary."""
+        """Build LightMem configuration dictionary matching official add_locomo.py."""
         config = {
             # Pre-processing
             "pre_compress": self.pre_compress,
             "topic_segment": self.topic_segment,
-            "precomp_topic_shared": False,  # Must be False when pre_compress=False
-            "messages_use": self.messages_use,
+            "precomp_topic_shared": self.precomp_topic_shared,
+            "messages_use": self._effective_messages_use,
 
             # Index and retrieval strategy
             "index_strategy": self.index_strategy,
@@ -473,21 +633,39 @@ class LightMemAgent(BaseAgent):
             },
         }
 
-        # Topic segmenter configuration (required when topic_segment=True)
-        if self.topic_segment:
-            # When pre_compress=False, topic_segmenter needs its own model
-            # Default to a multilingual BERT model for topic segmentation
-            # Note: Don't use device_map to avoid accelerate dependency
-            # NOTE: buffer_len is limited by BERT's max_position_embeddings (512)
-            # Long messages must be handled at the adapter level before sending to LightMem
-            config["topic_segmenter"] = {
+        # Pre-compressor configuration (matching official add_locomo.py)
+        if self.pre_compress and self.pre_compressor_model_path:
+            config["pre_compressor"] = {
                 "model_name": "llmlingua-2",
                 "configs": {
-                    "model_name": "microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank",
-                    "buffer_len": 512,  # Keep at 512 due to BERT model limit
-                    # Don't set device_map - let PyTorch handle device placement
+                    "llmlingua_config": {
+                        "model_name": self.pre_compressor_model_path,
+                        "use_llmlingua2": True,
+                    },
+                    "compress_config": {
+                        "instruction": "",
+                        "rate": self.compress_rate,
+                        "target_token": -1,
+                    },
                 }
             }
+
+        # Topic segmenter configuration
+        if self.topic_segment:
+            if self.pre_compress and self.precomp_topic_shared:
+                # When precomp_topic_shared=True, segmenter reuses the compressor's model
+                config["topic_segmenter"] = {
+                    "model_name": "llmlingua-2",
+                }
+            else:
+                # Standalone topic segmenter needs its own model
+                config["topic_segmenter"] = {
+                    "model_name": "llmlingua-2",
+                    "configs": {
+                        "model_name": self.pre_compressor_model_path or "microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank",
+                        "buffer_len": 512,
+                    }
+                }
 
         # Text Embedder configuration
         if self.embedding_provider == "local":
@@ -555,11 +733,8 @@ class LightMemAgent(BaseAgent):
 
         instance = self._LightMemory.from_config(config)
 
-        # Increase ShortMemBuffer threshold to reduce LLM API calls
-        # Default is 512, we increase to 4096 to batch more segments before extraction
-        if hasattr(instance, 'shortmem_buffer_manager'):
-            instance.shortmem_buffer_manager.max_tokens = 4096
-            print(f"[LightMem] ShortMemBuffer max_tokens set to 4096")
+        # Keep official default: ShortMemBufferManager.max_tokens = 512
+        # This controls how many segment tokens accumulate before triggering extraction
 
         # Replace the manager with our tracked version
         instance.manager = TrackedMemoryManager(
@@ -958,6 +1133,39 @@ class LightMemAgent(BaseAgent):
 
         return messages
 
+    def _get_extraction_prompt(self):
+        """
+        Get the appropriate extraction prompt based on dataset.
+
+        Official add_locomo.py passes dataset-specific prompts:
+        - flat mode: METADATA_GENERATE_PROMPT_locomo (multi-speaker aware)
+        - event mode: {factual: LoCoMo_Event_Binding_factual, relational: LoCoMo_Event_Binding_relational}
+
+        For non-locomo datasets, return None to use LightMem's built-in default prompt.
+        """
+        dataset = self._dataset_name.lower()
+
+        if dataset == "locomo":
+            # Import the LoCoMo-specific prompts from LightMem source
+            from lightmem.memory.prompts import (
+                METADATA_GENERATE_PROMPT_locomo,
+                LoCoMo_Event_Binding_factual,
+                LoCoMo_Event_Binding_relational,
+            )
+
+            if self.extraction_mode == "event":
+                return {
+                    "factual": LoCoMo_Event_Binding_factual,
+                    "relational": LoCoMo_Event_Binding_relational,
+                }
+            else:
+                # flat mode - pass the locomo-specific prompt as string
+                # (LightMem's normalize_extraction_prompts handles str -> dict conversion)
+                return METADATA_GENERATE_PROMPT_locomo
+
+        # For other datasets (medmemorybench, longmemeval, etc.), use LightMem's built-in default
+        return None
+
     def memorize(self, text: str, **kwargs) -> MemoryBuildResult:
         """
         Store text into LightMem memory system using official turn-by-turn approach.
@@ -965,11 +1173,8 @@ class LightMemAgent(BaseAgent):
         This follows EXACTLY the official LightMem usage pattern from add_locomo.py:
         1. Each turn (user + assistant pair) is passed to add_memory separately
         2. Only the LAST turn sets force_segment=True, force_extract=True
-        3. LightMem internally handles buffer overflow and BERT limits automatically
-
-        We do NOT add any custom BERT limit handling - LightMem handles this internally
-        in SenMemBufferManager.add_messages() which auto-triggers cut_with_segmenter
-        when token_count exceeds max_tokens.
+        3. When dataset is "locomo", pass the official METADATA_GENERATE_PROMPT_locomo
+        4. No offline_update — official retrieval uses pre-update data (qdrant_pre_update)
         """
         context_id = self._get_context_id()
         lightmem = self._get_lightmem_instance(context_id)
@@ -977,6 +1182,11 @@ class LightMemAgent(BaseAgent):
         # Log memorize start
         print(f"[LightMem] Starting memorize for context_id={context_id}")
         print(f"[LightMem] Input text length: {len(text)} chars, ~{self._llm_client.count_tokens(text)} tokens")
+
+        # Determine extraction prompt based on dataset
+        # Official add_locomo.py passes METADATA_GENERATE_PROMPT_locomo for flat mode
+        # and {factual, relational} prompts for event mode
+        extraction_prompt = self._get_extraction_prompt()
 
         # Format as LightMem messages (returns list of user+assistant pairs)
         messages = self._format_messages_for_lightmem(text)
@@ -1004,6 +1214,7 @@ class LightMemAgent(BaseAgent):
             try:
                 result = lightmem.add_memory(
                     messages=turn_messages,
+                    METADATA_GENERATE_PROMPT=extraction_prompt,
                     force_segment=is_last_turn,
                     force_extract=is_last_turn,
                 )
@@ -1028,6 +1239,11 @@ class LightMemAgent(BaseAgent):
 
         self._memory_chunks.append(text)
         self._is_initialized = True
+
+        # NOTE: No offline_update here.
+        # Official search_locomo.py retrieves from qdrant_pre_update (before offline_update).
+        # The offline_update in add_locomo.py modifies post_update dir which is NOT used for retrieval.
+        # Skipping offline_update ensures our retrieval matches the official evaluation setup.
 
         # Get token statistics from LightMem
         token_stats = lightmem.get_token_statistics()
@@ -1058,62 +1274,111 @@ class LightMemAgent(BaseAgent):
         system_message: Optional[str] = None,
         **kwargs,
     ) -> AgentResponse:
-        """Query LightMem and generate response using official implementation."""
+        """
+        Query LightMem using official retrieval logic from search_locomo.py:
+        1. Get all entries with vectors from Qdrant
+        2. Compute cosine similarity with query embedding
+        3. Take top-N (retrieve_num=60)
+        4. Group by speaker, format with official template
+        5. Use dataset-specific ANSWER_PROMPT
+        6. Generate answer with temperature=0.0
+        """
         context_id = self._get_context_id()
         lightmem = self._get_lightmem_instance(context_id)
 
         print(f"[LightMem] Starting query for context_id={context_id}")
         print(f"[LightMem] Question: {question[:100]}...")
 
-        # Use LightMem's official retrieve method
         retrieved_memories = []
-        memory_context = ""
 
         try:
-            # LightMem's retrieve returns formatted string
-            related = lightmem.retrieve(query=question, limit=self.retrieve_num)
+            # Step 1: Get all entries with vectors (equivalent to QdrantEntryLoader.load_entries)
+            all_entries = lightmem.embedding_retriever.get_all(
+                with_vectors=True, with_payload=True
+            )
+            print(f"[LightMem] Total entries in memory: {len(all_entries)}")
 
-            if related and related.strip():
-                memory_context = related
-                # Parse retrieved memories for logging
-                for line in related.split('\n'):
-                    if line.strip():
-                        retrieved_memories.append({
-                            "memory": line.strip()[:500],
-                            "type": "lightmem_retrieval",
-                        })
-                print(f"[LightMem] Retrieved {len(retrieved_memories)} memories")
-            else:
-                print(f"[LightMem] No memories retrieved")
+            if not all_entries:
+                print(f"[LightMem] No entries in memory, returning empty response")
+                response = self._llm_client.chat(
+                    format_messages(question, system_message),
+                    temperature=0.0,
+                )
+                return AgentResponse(
+                    output=response.content,
+                    query_time=0.0,
+                    retrieved_count=0,
+                    retrieved_memories=[],
+                    extra={"method": "lightmem"},
+                )
+
+            # Step 2: Encode query (equivalent to VectorRetriever)
+            query_vector = lightmem.text_embedder.embed(question)
+
+            # Step 3: Cosine similarity ranking + top-N
+            scored_entries = []
+            for entry in all_entries:
+                vec = entry.get('vector')
+                if vec is None:
+                    continue
+                score = _cosine_similarity(query_vector, vec)
+                scored_entries.append({
+                    'id': entry.get('id'),
+                    'score': score,
+                    'payload': entry.get('payload', {}),
+                })
+
+            scored_entries.sort(key=lambda x: x['score'], reverse=True)
+            retrieved = scored_entries[:self.retrieve_num]
+            print(f"[LightMem] Retrieved top-{self.retrieve_num}: {len(retrieved)} entries")
+
+            # Step 4: Group by speaker (equivalent to search_locomo.py speaker grouping)
+            speaker_groups: Dict[str, List[Dict]] = {}
+            for entry in retrieved:
+                speaker = entry['payload'].get('speaker_name', 'Unknown')
+                speaker_groups.setdefault(speaker, []).append(entry)
+
+            speaker_names = list(speaker_groups.keys())
+            print(f"[LightMem] Speaker groups: {[(k, len(v)) for k, v in speaker_groups.items()]}")
+
+            # Step 5: Format memories and build prompt based on dataset
+            prompt = self._build_answer_prompt(
+                question=question,
+                speaker_groups=speaker_groups,
+                speaker_names=speaker_names,
+                **kwargs,
+            )
+
+            # Collect retrieved memories for logging
+            for entry in retrieved:
+                payload = entry.get('payload', {})
+                retrieved_memories.append({
+                    "memory": (payload.get('memory') or '')[:500],
+                    "speaker": payload.get('speaker_name', 'Unknown'),
+                    "score": entry.get('score', 0.0),
+                    "type": "lightmem_vector_retrieval",
+                })
+
         except Exception as e:
-            print(f"[LightMem] Error in retrieve: {e}")
+            print(f"[LightMem] Error in retrieval pipeline: {e}")
             import traceback
             traceback.print_exc()
+            # Fallback: simple query without memory
+            response = self._llm_client.chat(
+                format_messages(question, system_message),
+                temperature=0.0,
+            )
+            return AgentResponse(
+                output=response.content,
+                query_time=0.0,
+                retrieved_count=0,
+                retrieved_memories=[],
+                extra={"method": "lightmem", "error": str(e)},
+            )
 
-        # Build full question with memory context
-        if memory_context:
-            full_question = f"[Retrieved Memories]\n{memory_context}\n\n[Question]\n{question}"
-        else:
-            full_question = question
-
-        # Truncate if too long
-        question_tokens = self._llm_client.count_tokens(full_question)
-        if question_tokens > self.max_context_tokens - self.max_tokens - 500:
-            # Truncate memory context
-            max_memory_tokens = self.max_context_tokens - self.max_tokens - 500 - self._llm_client.count_tokens(question)
-            if max_memory_tokens > 0 and memory_context:
-                memory_tokens = self._llm_client.count_tokens(memory_context)
-                if memory_tokens > max_memory_tokens:
-                    # Simple truncation
-                    ratio = max_memory_tokens / memory_tokens
-                    truncated_len = int(len(memory_context) * ratio * 0.9)
-                    memory_context = memory_context[:truncated_len] + "\n... [truncated]"
-                    full_question = f"[Retrieved Memories]\n{memory_context}\n\n[Question]\n{question}"
-                    print(f"[LightMem] Memory context truncated to {truncated_len} chars")
-
-        # Generate response using our tracked LLM client
-        messages = format_messages(full_question, system_message)
-        response = self._llm_client.chat(messages)
+        # Step 6: Generate answer with temperature=0.0 (matching official)
+        messages = [{"role": "system", "content": prompt}]
+        response = self._llm_client.chat(messages, temperature=0.0)
 
         print(f"[LightMem] Query complete, response length: {len(response.content)} chars")
 
@@ -1121,10 +1386,134 @@ class LightMemAgent(BaseAgent):
             output=response.content,
             query_time=0.0,
             retrieved_count=len(retrieved_memories),
-            retrieved_memories=retrieved_memories,  # Fix: properly set field
-            extra={
-                "method": "lightmem",
-            },
+            retrieved_memories=retrieved_memories,
+            extra={"method": "lightmem"},
+        )
+
+    def _build_answer_prompt(
+        self,
+        question: str,
+        speaker_groups: Dict[str, List[Dict]],
+        speaker_names: List[str],
+        **kwargs,
+    ) -> str:
+        """Build dataset-specific answer prompt using official templates."""
+        dataset = getattr(self, '_dataset_name', 'locomo').lower()
+
+        if dataset == 'longmemeval':
+            return self._build_longmemeval_prompt(question, speaker_groups, **kwargs)
+        elif dataset == 'medmemorybench':
+            return self._build_medmemorybench_prompt(question, speaker_groups, speaker_names)
+        else:
+            # Default: LoCoMo official ANSWER_PROMPT
+            return self._build_locomo_prompt(question, speaker_groups, speaker_names)
+
+    def _build_locomo_prompt(
+        self,
+        question: str,
+        speaker_groups: Dict[str, List[Dict]],
+        speaker_names: List[str],
+    ) -> str:
+        """Build LoCoMo prompt exactly as official search_locomo.py build_prompt_with_speaker_memories()."""
+        if len(speaker_names) == 0:
+            speaker_1_name = "Speaker 1"
+            speaker_2_name = "Speaker 2"
+            speaker_1_memories = "No memories available."
+            speaker_2_memories = "No memories available."
+        elif len(speaker_names) == 1:
+            speaker_1_name = speaker_names[0]
+            speaker_2_name = "Speaker 2"
+            speaker_1_memories = _format_related_memories(speaker_groups[speaker_1_name])
+            speaker_2_memories = "No memories available."
+        else:
+            speaker_1_name = speaker_names[0]
+            speaker_2_name = speaker_names[1]
+            speaker_1_memories = _format_related_memories(speaker_groups[speaker_1_name])
+            speaker_2_memories = _format_related_memories(speaker_groups[speaker_2_name])
+
+        return LOCOMO_ANSWER_PROMPT.format(
+            speaker_1_name=speaker_1_name,
+            speaker_1_memories=speaker_1_memories,
+            speaker_2_name=speaker_2_name,
+            speaker_2_memories=speaker_2_memories,
+            question=question,
+        )
+
+    def _build_longmemeval_prompt(
+        self,
+        question: str,
+        speaker_groups: Dict[str, List[Dict]],
+        **kwargs,
+    ) -> str:
+        """Build LongMemEval prompt exactly as official run_lightmem_gpt.py."""
+        # LongMemEval uses flat memory list (no speaker separation)
+        all_entries = []
+        for entries in speaker_groups.values():
+            all_entries.extend(entries)
+
+        # Format as simple memory string (official uses str(related_memories))
+        memory_lines = []
+        for entry in all_entries:
+            payload = entry.get('payload', {})
+            time_stamp = payload.get('time_stamp', '')
+            weekday = payload.get('weekday', '')
+            memory = (payload.get('memory') or payload.get('original_memory')
+                      or payload.get('compressed_memory') or '')
+            memory_lines.append(f"{time_stamp} {weekday} {memory}")
+
+        memories_str = "\n".join(memory_lines)
+
+        # Official uses question_date from the item metadata
+        question_date = kwargs.get('question_date', '')
+
+        return LONGMEMEVAL_ANSWER_PROMPT.format(
+            question_date=question_date,
+            question=question,
+            memories=memories_str,
+        )
+
+    def _build_medmemorybench_prompt(
+        self,
+        question: str,
+        speaker_groups: Dict[str, List[Dict]],
+        speaker_names: List[str],
+    ) -> str:
+        """Build MedMemoryBench prompt (adapted from LoCoMo for medical dialogues)."""
+        # Map speaker names to patient/doctor roles
+        speaker_1_name = "患者"
+        speaker_2_name = "医生"
+        speaker_1_memories = "暂无记忆。"
+        speaker_2_memories = "暂无记忆。"
+
+        if len(speaker_names) >= 1:
+            # Try to identify patient vs doctor from speaker names
+            patient_entries = []
+            doctor_entries = []
+            for name in speaker_names:
+                if '患者' in name or 'patient' in name.lower():
+                    patient_entries.extend(speaker_groups[name])
+                elif '医生' in name or 'doctor' in name.lower():
+                    doctor_entries.extend(speaker_groups[name])
+                else:
+                    # Default: first speaker is patient
+                    if not patient_entries:
+                        patient_entries.extend(speaker_groups[name])
+                    else:
+                        doctor_entries.extend(speaker_groups[name])
+
+            if patient_entries:
+                speaker_1_memories = _format_related_memories(
+                    [{'payload': e.get('payload', {})} for e in patient_entries]
+                )
+            if doctor_entries:
+                speaker_2_memories = _format_related_memories(
+                    [{'payload': e.get('payload', {})} for e in doctor_entries]
+                )
+
+        return MEDMEMORYBENCH_ANSWER_PROMPT.format(
+            speaker_1_memories=speaker_1_memories,
+            speaker_2_memories=speaker_2_memories,
+            question=question,
         )
 
     def reset(self) -> None:

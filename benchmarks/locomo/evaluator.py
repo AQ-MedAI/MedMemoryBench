@@ -220,19 +220,26 @@ class LoCoMoEvaluator:
                          f"Sessions: {chunk_session_ids[0]}-{chunk_session_ids[-1]} "
                          f"({len(chunk_sessions)} sessions, ~{chunk_tokens_est:,} tokens)")
 
-                # Format the chunk text with prompt template
-                formatted_text = self.prompt_manager.format_memorize(
-                    context=chunk_text,
-                    timestamp=speakers,
-                )
+                # Only agentic methods need instruction prompt for memorization;
+                # RAG/long_context methods store raw text directly into their stores
+                if self.prompt_manager.method_type == "agentic":
+                    memorize_text = self.prompt_manager.format_memorize(
+                        context=chunk_text,
+                        timestamp=speakers,
+                    )
+                else:
+                    memorize_text = chunk_text
 
                 chunk_start_time = time.time()
 
+                is_last_chunk = (chunk_idx == total_chunks - 1)
+
                 try:
                     memory_result = self.agent_manager.send_message(
-                        message=formatted_text,
+                        message=memorize_text,
                         memorizing=True,
                         context_id=unit.context_id,
+                        is_last_session=is_last_chunk,
                     )
 
                     chunk_time = time.time() - chunk_start_time
@@ -322,6 +329,11 @@ class LoCoMoEvaluator:
             result.memory_construction_time = memory_time_per_query
             results.append(result)
 
+            if "memrl" in self.agent_manager.method_name:
+                self.agent_manager.send_query_feedback(
+                    score=result.score, is_correct=result.is_correct
+                )
+
             status = "✓" if result.is_correct else "✗"
             self._log(f"    [{status}] {query.query_id} ({query.query_type}): {result.score:.2f}")
 
@@ -356,12 +368,16 @@ class LoCoMoEvaluator:
             query_time = response.get("query_time", 0.0)
             retrieved_memories = response.get("retrieved_memories", [])
             retrieved_count = response.get("retrieved_count", 0)
+            extra = response.get("extra", {})
         else:
             model_output = str(response)
             query_time = 0.0
             retrieved_memories = []
             retrieved_count = 0
+            extra = {}
 
+        saved_phase = get_usage_tracker()._current_phase
+        get_usage_tracker().set_phase("evaluation")
         result = self.metrics_calculator.compute(
             query_id=query.query_id,
             query_type=query.query_type,
@@ -373,10 +389,12 @@ class LoCoMoEvaluator:
             adversarial_answer=query.adversarial_answer,
             metadata=query.metadata,
         )
+        get_usage_tracker().set_phase(saved_phase)
 
         result.query_time = query_time
         result.retrieved_memories = retrieved_memories
         result.retrieved_count = retrieved_count
+        result.extra = extra
 
         if "category" not in result.details:
             result.details["category"] = query.category

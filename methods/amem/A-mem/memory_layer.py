@@ -28,15 +28,22 @@ class BaseLLMController(ABC):
         pass
 
 class OpenAIController(BaseLLMController):
-    def __init__(self, model: str = "gpt-4", api_key: Optional[str] = None):
+    def __init__(self, model: str = "gpt-4", api_key: Optional[str] = None,
+                 api_base: Optional[str] = None, max_tokens: int = 2000,
+                 usage_tracker: Optional[Any] = None):
         try:
             from openai import OpenAI
             self.model = model
+            self.max_tokens = max_tokens
+            self.usage_tracker = usage_tracker
             if api_key is None:
                 api_key = os.getenv('OPENAI_API_KEY')
             if api_key is None:
                 raise ValueError("OpenAI API key not found. Set OPENAI_API_KEY environment variable.")
-            self.client = OpenAI(api_key=api_key)
+            client_kwargs = {"api_key": api_key}
+            if api_base:
+                client_kwargs["base_url"] = api_base
+            self.client = OpenAI(**client_kwargs)
         except ImportError:
             raise ImportError("OpenAI package not found. Install it with: pip install openai")
 
@@ -45,7 +52,24 @@ class OpenAIController(BaseLLMController):
         new_patterns = ["gpt-5", "o1-", "o3-"]
         return any(p in self.model.lower() for p in new_patterns)
 
+    def _record_usage(self, response, latency: float) -> None:
+        if self.usage_tracker is None or response.usage is None:
+            return
+        try:
+            from utils.llm_client import LLMResponse
+            llm_response = LLMResponse(
+                content="",
+                input_tokens=response.usage.prompt_tokens,
+                output_tokens=response.usage.completion_tokens,
+                latency=latency,
+                model=self.model,
+            )
+            self.usage_tracker.record(llm_response)
+        except Exception:
+            pass
+
     def get_completion(self, prompt: str, response_format: dict, temperature: float = 0.7) -> str:
+        start_time = time.time()
         params = {
             "model": self.model,
             "messages": [
@@ -55,12 +79,12 @@ class OpenAIController(BaseLLMController):
             "response_format": response_format,
             "temperature": temperature,
         }
-        # Use max_completion_tokens for new models (gpt-5, o1, o3)
         if self._use_max_completion_tokens():
-            params["max_completion_tokens"] = 1000
+            params["max_completion_tokens"] = self.max_tokens
         else:
-            params["max_tokens"] = 1000
+            params["max_tokens"] = self.max_tokens
         response = self.client.chat.completions.create(**params)
+        self._record_usage(response, time.time() - start_time)
         return response.choices[0].message.content
 
 class OllamaController(BaseLLMController):
@@ -245,21 +269,26 @@ class LiteLLMController(BaseLLMController):
 
 class LLMController:
     """LLM-based controller for memory metadata generation"""
-    def __init__(self, 
+    def __init__(self,
                  backend: Literal["openai", "ollama", "sglang"] = "sglang",
-                 model: str = "gpt-4", 
+                 model: str = "gpt-4",
                  api_key: Optional[str] = None,
                  api_base: Optional[str] = None,
                  sglang_host: str = "http://localhost",
-                 sglang_port: int = 30000):
+                 sglang_port: int = 30000,
+                 max_tokens: int = 2000,
+                 usage_tracker: Optional[Any] = None):
         if backend == "openai":
-            self.llm = OpenAIController(model, api_key)
+            self.llm = OpenAIController(
+                model, api_key, api_base=api_base,
+                max_tokens=max_tokens, usage_tracker=usage_tracker,
+            )
         elif backend == "ollama":
             # Use LiteLLM to control Ollama with JSON output
             ollama_model = f"ollama/{model}" if not model.startswith("ollama/") else model
             self.llm = LiteLLMController(
-                model=ollama_model, 
-                api_base="http://localhost:11434", 
+                model=ollama_model,
+                api_base="http://localhost:11434",
                 api_key="EMPTY"
             )
         elif backend == "sglang":
@@ -675,7 +704,7 @@ class SimpleEmbeddingRetriever:
 
 class AgenticMemorySystem:
     """Memory management system with embedding-based retrieval"""
-    def __init__(self, 
+    def __init__(self,
                  model_name: str = 'all-MiniLM-L6-v2',
                  llm_backend: str = "sglang",
                  llm_model: str = "gpt-4o-mini",
@@ -683,10 +712,16 @@ class AgenticMemorySystem:
                  api_key: Optional[str] = None,
                  api_base: Optional[str] = None,
                  sglang_host: str = "http://localhost",
-                 sglang_port: int = 30000):
+                 sglang_port: int = 30000,
+                 max_tokens: int = 2000,
+                 usage_tracker: Optional[Any] = None):
         self.memories = {}  # id -> MemoryNote
         self.retriever = SimpleEmbeddingRetriever(model_name)
-        self.llm_controller = LLMController(llm_backend, llm_model, api_key, api_base, sglang_host, sglang_port)
+        self.llm_controller = LLMController(
+            llm_backend, llm_model, api_key, api_base,
+            sglang_host, sglang_port, max_tokens=max_tokens,
+            usage_tracker=usage_tracker,
+        )
         self.evolution_system_prompt = '''
                                 You are an AI memory evolution agent responsible for managing and evolving a knowledge base.
                                 Analyze the the new memory note according to keywords and context, also with their several nearest neighbors memory.

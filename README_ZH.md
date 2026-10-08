@@ -1,4 +1,4 @@
-# MedMemoryBench：面向个性化医疗的 Agent 记忆能力基准测试
+# MedMemoryBench：面向个性化医疗的 Agent 记忆能力基准测试 [NIPS'26]
 
 <div align="center">
   <img src="figs/4examples.png" alt="MedMemoryBench 概览 — 医疗记忆评测的四大核心挑战" width="800"/>
@@ -9,8 +9,8 @@
 </p>
 
 <p align="center">
-｜🤗 <a href="https://huggingface.co/datasets/Cyan27/MedMemoryBench" target="_blank">HuggingFace Dataset</a> ｜
-📄 <a href="#-引用">Preprint (Coming Soon)</a> ｜
+｜🤗 <a href="https://huggingface.co/datasets/AQ-MedAI/MedMemoryBench" target="_blank">HuggingFace Dataset</a> ｜
+📄 <a href="https://arxiv.org/abs/2605.11814">Arxiv Preprint</a> ｜
 🌐 <a href="README.md">English</a> ｜
 </p>
 
@@ -18,6 +18,7 @@
   <img src="https://img.shields.io/badge/version-1.0.0-blue" alt="version"/>
   <img src="https://img.shields.io/badge/python-%3E%3D3.10-blue" alt="python"/>
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="license"/>
+  <img src="https://img.shields.io/badge/NeurIPS-2026-8A2BE2" alt="NeurIPS 2026"/>
 </p>
 
 ---
@@ -28,6 +29,7 @@
 
 - [最新动态](#-最新动态)
 - [特性亮点](#-特性亮点)
+- [数据集](#-数据集)
 - [项目结构](#-项目结构)
 - [快速开始](#-快速开始)
 - [配置说明](#-配置说明)
@@ -38,8 +40,9 @@
 
 ## 📰 最新动态
 
+- **[2026.09]** 🎉 MedMemoryBench 已被 **NeurIPS 2026** 接收！
 - **[2026.05]** MedMemoryBench v1.0 正式发布 — 包含数据集、评测框架与 14 种记忆方法基线。
-- **[2026.05]** 数据集已上线 [HuggingFace](https://huggingface.co/datasets/Cyan27/MedMemoryBench)。
+- **[2026.05]** 数据集已上线 [HuggingFace](https://huggingface.co/datasets/AQ-MedAI/MedMemoryBench)。
 
 ## ✨ 特性亮点
 
@@ -96,6 +99,18 @@
 | `state_update` | 200 | 追踪患者状态演变 |
 | `multi_hop_clinical_deduction` | 191 | 多跳临床推理 |
 
+## 📦 数据集
+
+所有数据集都从 `data/` 下的固定路径加载，该路径由 `configs/dataset_config/` 中对应配置的 `data.root_dir` 字段声明。**请严格按下表路径放置数据集** —— 加载器以仓库根目录为基准解析 `data/`，不会在其他位置查找。
+
+| 数据集 | 来源 | 期望本地路径 | 配置文件 | 体积 |
+|:------|:-----|:-------------|:---------|:-----|
+| **MedMemoryBench**（中文） | 🤗 [AQ-MedAI/MedMemoryBench](https://huggingface.co/datasets/AQ-MedAI/MedMemoryBench) | `data/MedMemoryBench/` | `medmemorybench.yaml` | ~598 MB |
+| **MedMemoryBench**（英文） | 🤗 [AQ-MedAI/MedMemoryBench](https://huggingface.co/datasets/AQ-MedAI/MedMemoryBench) | `data/MedMemoryBench_EN/` | `medmemorybench.yaml`（改 `root_dir`） | ~443 MB |
+| **LoCoMo** | 🐙 [snap-research/locomo](https://github.com/snap-research/locomo) | `data/locomo/` | `locomo.yaml` | ~18 MB |
+| **AMA-Bench** | 🐙 [AMA-Bench/AMA-Hub](https://github.com/AMA-Bench/AMA-Hub) | `data/AMA-Hub/` | `ama_bench.yaml` | ~48 MB |
+| LongMemEval-V2（可选） | 🐙 [LongMemEval-V2](https://github.com/xiaowu0162/LongMemEval-V2) | `data/longmemeval-v2/` | `longmemeval_v2.yaml` | — |
+
 ## 📁 项目结构
 
 <details>
@@ -128,7 +143,8 @@ MedMemoryBench/
 │   │   └── ...                   # + qwen3 变体
 │   └── dataset_config/
 │       ├── medmemorybench.yaml
-│       └── locomo.yaml
+│       ├── locomo.yaml
+│       └── ama_bench.yaml
 │
 ├── methods/                      # 记忆方法实现
 │   ├── base.py                   # BaseAgent 抽象基类
@@ -191,10 +207,11 @@ MedMemoryBench/
 │   ├── run_eval.sh
 │   └── mirix-services.sh
 │
-├── data/                         # 数据集（Git LFS）
-│   ├── MedMemoryBench/           # 中文版，~598 MB
-│   ├── MedMemoryBench_EN/        # 英文版，~443 MB
-│   └── locomo/                   # LoCoMo，~18 MB
+├── data/                         # 数据集（不纳入版本控制，详见「数据集」章节）
+│   ├── MedMemoryBench/           # MedMemoryBench 中文版，~598 MB
+│   ├── MedMemoryBench_EN/        # MedMemoryBench 英文版，~443 MB
+│   ├── locomo/                   # LoCoMo 上游仓库，~18 MB
+│   └── AMA-Hub/                  # AMA-Bench 上游仓库，~48 MB
 │
 ├── generation/                   # 数据集生成流水线（子项目）
 ├── outputs/                      # 评测输出（gitignored）
@@ -209,18 +226,12 @@ MedMemoryBench/
 
 ### 1. 克隆仓库
 
-> **注意：** 本仓库通过 **Git LFS** 管理数据集，请在克隆前安装 Git LFS。
-
 ```bash
-# 安装 Git LFS（已安装则跳过）
-brew install git-lfs                  # macOS
-sudo apt-get install git-lfs          # Ubuntu/Debian
-# Windows: https://git-lfs.github.com/
-
-git lfs install
 git clone https://github.com/AQ-MedAI/MedMemoryBench.git
 cd MedMemoryBench
 ```
+
+> **注意：** `data/` 不纳入 Git 版本控制。克隆完成后请先参照[数据集](#-数据集)章节，将 MedMemoryBench、LoCoMo、AMA-Bench 获取到 `data/` 目录，再运行评测。
 
 ### 2. 环境配置
 
@@ -343,14 +354,14 @@ embedding:
 
 ### 数据集配置
 
-数据集配置位于 `configs/dataset_config/`：
+数据集配置位于 `configs/dataset_config/`。每份配置通过 `root_dir` 将数据集固定在 `data/` 下的指定位置（详见[数据集](#-数据集)章节）：
 
 ```yaml
 # configs/dataset_config/medmemorybench.yaml
 
 dataset_name: "medmemorybench"
 description: "Medical dialogue memory evaluation dataset"
-language: "zh"
+language: "zh"                      # 仅元信息；切换中英文请改 root_dir，此字段不生效
 
 data:
   root_dir: "data/MedMemoryBench"
@@ -369,6 +380,15 @@ query_types:
   # ... 更多类型
 ```
 
+```yaml
+# configs/dataset_config/locomo.yaml          # configs/dataset_config/ama_bench.yaml
+data:                                         data:
+  root_dir: "data/locomo/data"                  root_dir: "data/AMA-Hub/dataset/test"
+  data_file: "locomo10.json"                    data_file: "open_end_qa_set.jsonl"
+```
+
+> 若数据集存放在其他位置（例如挂载的大容量数据盘），可将 `root_dir` 指向对应目录。只需保证 `data_file` 所指文件所在的目录（MedMemoryBench 则是 `persona_{id}/eval/` 目录树）与配置一致即可。
+
 ## 📄 输出格式
 
 评测结果保存在 `outputs/<方法>_<模型>/` 目录下：
@@ -386,10 +406,10 @@ outputs/
 如果 MedMemoryBench 对您的研究有帮助，请考虑引用我们的工作：
 
 ```bibtex
-@article{medmemorybench2026,
+@inproceedings{wang2026medmemorybench,
   title={MedMemoryBench: Benchmarking Agent Memory in Personalized Healthcare},
-  author={TODO},
-  journal={arXiv preprint arXiv:XXXX.XXXXX},
+  author={Yihao Wang and Haoran Xu and Renjie Gu and Yixuan Ye and Xinyi Chen and Xinyu Mu and Yuan Gao and Chunxiao Guo and Peng Wei and Jinjie Gu and Huan Li and Ke Chen and Lidan Shou},
+  booktitle={Advances in Neural Information Processing Systems (NeurIPS)},
   year={2026}
 }
 ```

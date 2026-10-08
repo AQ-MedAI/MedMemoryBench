@@ -1,4 +1,5 @@
 # LightMem Agent Configuration (ICLR 2026)
+# Aligned with official add_locomo.py / search_locomo.py experiments
 
 method_name: "lightmem"
 method_type: "agentic_memory"
@@ -8,33 +9,39 @@ model:
   provider: "openai"
   name: "gpt-5.1"
   temperature: 0.3
-  max_completion_tokens: 10000
+  max_completion_tokens: 40960
 
 # Embedding model configuration
 embedding:
   provider: "local"
-  model: "BAAI/bge-small-zh-v1.5"
-  model_path: "models/bge-small-zh-v1.5"
-  dim: 512
+  model: "BAAI/bge-small-en-v1.5"
+  model_path: "models/bge-small-en-v1.5"
+  dim: 384
 
 agent_params:
-  retrieve_num: 20
+  retrieve_num: 60
 
-  # IMPORTANT: topic_segment MUST be true for proper memory extraction
-  pre_compress: false          # Enable text pre-compression (requires llmlingua-2)
-  topic_segment: true          # Enable topic segmentation (REQUIRED for memory extraction)
+  # Pre-compression (aligned with official: pre_compress=True, rate=0.6)
+  pre_compress: true
+  pre_compressor_model_path: "models/llmlingua-2-bert-base-multilingual-cased-meetingbank"
+  compress_rate: 0.6
+  precomp_topic_shared: true
 
-  # Strategy configuration
+  # Topic segmentation (REQUIRED for memory extraction)
+  topic_segment: true
+
+  # Strategy configuration (aligned with official add_locomo.py)
   index_strategy: "embedding"       # embedding / context / hybrid
   retrieve_strategy: "embedding"    # embedding / context / hybrid
   update_mode: "offline"            # online / offline
-  extraction_mode: "flat"            # flat / event (dual-perspective extraction, flat reduces API calls by half)
-  messages_use: "hybrid"            # user_only / assistant_only / hybrid
+  extraction_mode: "flat"           # flat / event (dual-perspective extraction)
+  messages_use: "user_only"         # official uses user_only
 
   # LightMem internal LLM settings (for memory extraction)
+  # official add_locomo.py uses max_tokens=16000
   lightmem_temperature: 0.3
-  lightmem_max_tokens: 5000
+  lightmem_max_tokens: 40960
   lightmem_top_p: 0.1
 
   # Token limits
-  max_context_tokens: 120000
+  max_context_tokens: 64000

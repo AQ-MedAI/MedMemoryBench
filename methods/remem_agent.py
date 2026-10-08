@@ -70,6 +70,8 @@ class TrackedLLMWrapper:
         extra_kwargs = {}
         if "response_format" in kwargs:
             extra_kwargs["response_format"] = kwargs["response_format"]
+        if "max_completion_tokens" in kwargs:
+            extra_kwargs["max_tokens"] = kwargs["max_completion_tokens"]
 
         try:
             response = self.llm_client.chat(
@@ -302,10 +304,10 @@ class RememAgent(BaseAgent):
         # Graph config
         is_directed_graph: bool = False,
         synonymy_edge_sim_threshold: float = 0.8,
-        synonymy_edge_topk: int = 10,
+        synonymy_edge_topk: int = 2047,
         # Retrieval config
-        retrieval_top_k: int = 20,
-        qa_top_k: int = 10,
+        retrieval_top_k: int = 200,
+        qa_top_k: int = 5,
         linking_top_k: int = 5,
         damping: float = 0.5,
         passage_node_weight: float = 0.05,
@@ -320,8 +322,6 @@ class RememAgent(BaseAgent):
         # API concurrency (lower values reduce API timeouts)
         extraction_max_workers: int = 5,
         # Cumulative build config
-        # session_batch_size: number of sessions to accumulate before triggering graph build
-        # Set to 10 to match evaluation_interval; set to 1 to disable accumulation
         session_batch_size: int = 10,
         # Embedding config
         embedding_provider: str = "local",
@@ -343,6 +343,8 @@ class RememAgent(BaseAgent):
         max_context_tokens: int = 120000,
         # Working directory
         working_dir: Optional[str] = None,
+        # Dataset awareness for prompt template routing
+        dataset_name: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(model, temperature, max_tokens, **kwargs)
@@ -387,6 +389,7 @@ class RememAgent(BaseAgent):
         self.max_context_tokens = max_context_tokens
 
         self.working_dir = working_dir
+        self.dataset_name = dataset_name
 
         self._llm_client = create_llm_client(
             provider=provider,
@@ -435,6 +438,39 @@ class RememAgent(BaseAgent):
 
         logger.info("ReMem modules loaded successfully")
 
+    def _get_remem_dataset_label(self) -> str:
+        """Map framework dataset_name to ReMem's internal dataset label.
+
+        This controls prompt template selection in episodic_gist_extraction:
+        - "locomo_*" -> selects English templates (*_locomo)
+        - "medmemorybench" -> selects Chinese templates (*_medmemorybench)
+        """
+        if not self.dataset_name:
+            return "medmemorybench"
+        name = self.dataset_name.lower()
+        if name.startswith("locomo"):
+            return "locomo_episodic"
+        if name.startswith("longmemeval"):
+            return "longmemeval"
+        return "medmemorybench"
+
+    def _get_rerank_dspy_path(self) -> Optional[str]:
+        """Resolve the DSPy filter prompt file path for reranking."""
+        remem_src = Path(__file__).resolve().parent / "REMem" / "src"
+        dspy_path = remem_src / "remem" / "prompts" / "dspy_prompts" / "filter_llama3.3-70B-Instruct.json"
+        if dspy_path.exists():
+            return str(dspy_path)
+        return None
+
+    def _get_qa_prompt_template(self) -> str:
+        """Route qa_prompt_template based on dataset_name."""
+        if not self.dataset_name:
+            return "rag_qa_unified"
+        name = self.dataset_name.lower()
+        if "longmemeval" in name:
+            return "rag_qa_longmemeval"
+        return "rag_qa_unified"
+
     def _build_remem_config(self, context_id: int) -> Any:
         """Build a ReMem BaseConfig object for the given context."""
         self._load_remem_modules()
@@ -449,8 +485,11 @@ class RememAgent(BaseAgent):
             )
         os.makedirs(save_dir, exist_ok=True)
 
+        dataset_label = self._get_remem_dataset_label()
+        rerank_path = self._get_rerank_dspy_path()
+
         config = self._BaseConfig(
-            dataset="medmemorybench",
+            dataset=dataset_label,
             save_dir=save_dir,
 
             # LLM config
@@ -469,7 +508,7 @@ class RememAgent(BaseAgent):
             is_directed_graph=self.is_directed_graph,
             synonymy_edge_sim_threshold=self.synonymy_edge_sim_threshold,
             synonymy_edge_topk=self.synonymy_edge_topk,
-            graph_type="facts_and_sim",
+            graph_type="facts_and_sim_passage_node_unidirectional",
 
             # Retrieval config
             retrieval_top_k=self.retrieval_top_k,
@@ -496,20 +535,31 @@ class RememAgent(BaseAgent):
             embedding_max_seq_len=self.embedding_max_seq_len,
             embedding_return_as_normalized=True,
 
-            # Text preprocessing: use "none" mode to skip internal chunking.
-            # Each session is passed as a whole document, significantly reducing
-            # chunk count and LLM calls.
+            # Text preprocessing: use "by_session" to preserve date/role metadata
+            # in chunks, matching official implementation (locomo.py:140)
             text_preprocessor_class_name=self.text_preprocessor_class_name,
-            preprocess_chunk_func="none",
+            preprocess_chunk_func="by_session",
             preprocess_chunk_max_token_size=self.chunk_size_tokens,
             preprocess_chunk_overlap_token_size=self.chunk_overlap_tokens,
+
+            # Rerank filter for fact triple filtering
+            rerank_dspy_file_path=rerank_path,
+
+            # QA configuration (aligned with official: locomo.py:144-145)
+            qa_passage_prefix="",
+            qa_prompt_template=self._get_qa_prompt_template(),
 
             # Evaluation (disabled - we use our own)
             do_eval_qa=False,
             do_eval_retrieval=False,
-
-            qa_passage_prefix="- ",
         )
+
+        # BaseConfig.__post_init__ overrides save_dir based on dataset name.
+        # Restore per-context save_dir for proper isolation.
+        config.save_dir = save_dir
+
+        logger.info(f"[ReMem] Config: dataset={dataset_label}, chunk_func=by_session, "
+                    f"rerank={rerank_path is not None}, qa_template={self._get_qa_prompt_template()}")
 
         return config
 
@@ -562,18 +612,178 @@ class RememAgent(BaseAgent):
             self._remem_instances[context_id] = self._create_tracked_remem(context_id)
         return self._remem_instances[context_id]
 
-    def _format_input_documents(self, text: str) -> List[str]:
-        """Format input text as a document list for ReMem.
+    def _parse_session_to_messages(self, text: str) -> List[Dict[str, str]]:
+        """Parse formatted session text into structured messages for ReMem.
 
-        Passes the full session text as a single document rather than splitting it.
-        ReMem's internal text_preprocessor.batch_preprocess_doc() handles chunking
-        uniformly based on chunk_size_tokens, which is typically larger than a single
-        session, so most sessions remain intact.
+        Handles three formats from the evaluation framework:
+
+        LoCoMo format (from LoCoMoSession.to_memory_text):
+            DATE: 1:56 pm on 8 May, 2023
+            CONVERSATION:
+            Caroline said, "Hey Mel! Good to see you!"
+            Melanie said, "Hi Caroline!"
+
+        LongMemEval format (from LongMemEvalSession.to_memory_text):
+            [2023-05-08]
+            user: Hello there
+            assistant: Hi! How can I help?
+
+        MedMemoryBench format (from MedSession.to_memory_text):
+            [2024年1月6日]
+
+            Patient: 医生您好...
+            Doctor: 您好...
+
+        Returns List[Dict] with keys: role, content, date
+        (matching official get_sessions() output for chunk_by_session).
         """
+        import re
+
+        messages = []
+        lines = text.strip().split('\n')
+        current_date = None
+        i = 0
+
+        while i < len(lines):
+            line = lines[i].strip()
+            i += 1
+
+            if not line:
+                continue
+
+            # Skip "CONVERSATION:" header
+            if line.upper() == "CONVERSATION:":
+                continue
+
+            # LoCoMo: "DATE: 1:56 pm on 8 May, 2023"
+            date_match = re.match(
+                r'^(?:DATE|Date|日期|Time|时间)\s*[:：]\s*(.+)$', line
+            )
+            if date_match:
+                current_date = date_match.group(1).strip()
+                continue
+
+            # LongMemEval/MedMemoryBench: "[2024年1月6日]" or "[2023-05-08]"
+            bracket_date = re.match(r'^\[([^\]]+)\]$', line)
+            if bracket_date:
+                current_date = bracket_date.group(1).strip()
+                continue
+
+            # LoCoMo with image: 'Speaker said, "content" and shared ...'
+            said_shared_match = re.match(r'^(\w+)\s+said,\s*"(.+?)"\s+and\s+shared\s+(.+)$', line)
+            if said_shared_match:
+                role = said_shared_match.group(1).strip()
+                content = said_shared_match.group(2).strip()
+                shared = said_shared_match.group(3).strip()
+                messages.append({
+                    "role": role,
+                    "content": f"{content} [shared: {shared}]",
+                    "date": current_date or "",
+                })
+                continue
+
+            # LoCoMo: 'Speaker said, "content"' — handle multi-line quotes
+            said_match = re.match(r'^(\w+)\s+said,\s*"(.+)', line)
+            if said_match:
+                role = said_match.group(1).strip()
+                content_part = said_match.group(2)
+                # Check if quote closes on this line
+                if content_part.endswith('"'):
+                    content = content_part[:-1]
+                else:
+                    # Multi-line: accumulate until closing quote
+                    content_lines = [content_part]
+                    while i < len(lines):
+                        next_line = lines[i]
+                        i += 1
+                        if next_line.rstrip().endswith('"'):
+                            content_lines.append(next_line.rstrip()[:-1])
+                            break
+                        content_lines.append(next_line.rstrip())
+                    content = "\n".join(content_lines)
+                messages.append({
+                    "role": role,
+                    "content": content,
+                    "date": current_date or "",
+                })
+                continue
+
+            # LongMemEval/MedMemoryBench: "role: content" format
+            speaker_match = re.match(r'^([^:：]{1,30})\s*[:：]\s*(.+)$', line)
+            if speaker_match:
+                role = speaker_match.group(1).strip()
+                content = speaker_match.group(2).strip()
+                messages.append({
+                    "role": role,
+                    "content": content,
+                    "date": current_date or "",
+                })
+                continue
+
+            # Continuation of previous message or standalone line
+            if messages:
+                messages[-1]["content"] += "\n" + line
+            else:
+                messages.append({
+                    "role": "unknown",
+                    "content": line,
+                    "date": current_date or "",
+                })
+
+        return messages
+
+    def _format_input_documents(self, text: str) -> List[List[Dict[str, str]]]:
+        """Format input text as structured session data for ReMem.
+
+        A single memorize() call may contain multiple sessions (joined by
+        double newlines in the evaluator's _split_sessions_into_chunks).
+        We split them back into individual sessions for chunk_by_session().
+
+        Returns List[List[Dict]] matching the official get_sessions() format:
+        each session is a List[Dict] with keys: role, content, date.
+        """
+        import re
+
         text = text.strip()
-        if text:
-            return [text]
-        return []
+        if not text:
+            return []
+
+        # Split on session boundaries:
+        # LoCoMo: "DATE: ..." marks each session start
+        # MedMemoryBench: "[date]" or "[Health consultation...]" marks start
+        session_pattern = re.compile(
+            r'(?=^DATE\s*:)|(?=^\[[^\]]+\]\s*$)',
+            re.MULTILINE
+        )
+        parts = session_pattern.split(text)
+        parts = [p.strip() for p in parts if p and p.strip()]
+
+        sessions = []
+        for part in parts:
+            messages = self._parse_session_to_messages(part)
+            if messages:
+                sessions.append(messages)
+
+        # If splitting didn't work (no recognized boundaries), treat as single session
+        if not sessions:
+            messages = self._parse_session_to_messages(text)
+            if messages:
+                sessions.append(messages)
+
+        return sessions
+
+    def _extract_raw_question(self, text: str) -> str:
+        """Extract raw question from format_query wrapped text.
+
+        ReMem's GraphAgent needs bare questions for reasoning.
+        The evaluator passes format_query output like:
+          "Based on ... Question: {q}\n\nAnswer:"
+        """
+        import re
+        match = re.search(r'Question:\s*(.+?)(?:\n\s*\n\s*Answer:|$)', text, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        return text.strip()
 
     def memorize(self, text: str, is_last_session: bool = False, **kwargs) -> MemoryBuildResult:
         """Memory construction phase.
@@ -749,13 +959,14 @@ class RememAgent(BaseAgent):
         try:
             remem = self._get_remem_instance(context_id)
 
-            # Each session becomes an independent document
+            # Each session is converted to List[Dict] (structured messages)
+            # matching official format: List[List[Dict]] passed to rag.index()
             docs = []
             for session_text in pending_texts:
-                formatted_docs = self._format_input_documents(session_text)
-                docs.extend(formatted_docs)
+                session_messages = self._format_input_documents(session_text)
+                docs.extend(session_messages)
 
-            logger.info(f"[ReMem] Combined {session_count} sessions into {len(docs)} documents")
+            logger.info(f"[ReMem] Combined {session_count} sessions into {len(docs)} structured documents")
 
             # Force fresh index build
             original_force_index = remem.global_config.force_index_from_scratch
@@ -806,6 +1017,12 @@ class RememAgent(BaseAgent):
                 "time_cost": time_cost,
             }
 
+        except (ImportError, ModuleNotFoundError) as e:
+            # Critical: missing dependencies should not be silently swallowed.
+            # Re-raise so the user gets immediate, visible feedback.
+            logger.error(f"[ReMem] FATAL: Missing dependency for ReMem: {e}")
+            raise
+
         except Exception as e:
             logger.error(f"[ReMem] Graph construction error: {e}")
             import traceback
@@ -847,8 +1064,10 @@ class RememAgent(BaseAgent):
 
         get_usage_tracker().set_phase("query")
 
+        # Extract raw question from format_query wrapped text
+        raw_question = self._extract_raw_question(question)
         logger.info(f"[ReMem] Starting query for context_id={context_id}")
-        logger.info(f"[ReMem] Question: {question[:100]}...")
+        logger.info(f"[ReMem] Raw question: {raw_question[:100]}...")
 
         start_time = time.time()
 
@@ -872,13 +1091,17 @@ class RememAgent(BaseAgent):
                 logger.info("[ReMem] Preparing retrieval objects...")
                 remem.prepare_retrieval_objects()
 
+            # Build question_metadata for official rag_for_qa alignment
+            question_metadata = [kwargs.get("question_metadata", {"type": "default"})]
+
             if self.use_agent:
                 answer, retrieved_docs, extra_info = self._query_with_agent(
-                    remem, question, system_message
+                    remem, raw_question, system_message
                 )
             else:
                 answer, retrieved_docs, extra_info = self._query_with_rag(
-                    remem, question, system_message
+                    remem, raw_question, system_message,
+                    question_metadata=question_metadata,
                 )
 
             query_time = time.time() - start_time
@@ -931,18 +1154,26 @@ class RememAgent(BaseAgent):
         remem: Any,
         question: str,
         system_message: Optional[str],
+        question_metadata: Optional[List[Dict]] = None,
     ) -> Tuple[str, List[Dict], Dict]:
         """Standard RAG query flow using ReMem's rag_for_qa.
+
+        Aligned with official implementation (locomo.py:248-249):
+        rag.rag_for_qa(questions, gold_docs, gold_answers, selected_metrics, question_metadata=...)
 
         Returns:
             Tuple[answer, retrieved_docs, extra_info]
         """
+        if question_metadata is None:
+            question_metadata = [{"type": "default"}]
+
         logger.info(f"[ReMem] Calling rag_for_qa with question: {question[:50]}...")
         solutions, responses, metadata, qa_results, retrieval_results = remem.rag_for_qa(
             queries=[question],
             gold_docs=None,
             gold_answers=None,
             metrics=(),
+            question_metadata=question_metadata,
             to_save=False,
         )
 

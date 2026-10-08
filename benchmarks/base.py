@@ -2,14 +2,14 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional, Iterator
+from typing import Dict, Any, List, Optional, Iterator, Union
 from pathlib import Path
 
 
 @dataclass
 class Session:
     """Session data base class."""
-    session_id: int
+    session_id: Union[int, str]
     content: str
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -38,7 +38,7 @@ class EvaluationUnit:
     unit_id: int
     sessions_to_inject: List[Session]
     queries_to_evaluate: List[Query]
-    context_id: Optional[int] = None
+    context_id: Optional[Union[int, str]] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 

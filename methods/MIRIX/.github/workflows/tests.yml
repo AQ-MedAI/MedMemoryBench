@@ -1,0 +1,103 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, master, dev, re-org, production ]
+  pull_request:
+    branches: [ main, master, dev, re-org, production ]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.12']
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Cache pip packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .
+        pip install pytest pytest-cov python-dotenv requests pyyaml pytest-asyncio
+
+    - name: Verify workspace structure
+      run: |
+        echo "Current directory: ${{ github.workspace }}"
+        ls -la
+      shell: bash
+
+    - name: Run unit/in-process tests (no server required)
+      run: |
+        cd "${{ github.workspace }}"
+        python -m pytest tests/test_memory_server.py \
+               tests/test_auth_provider.py \
+               tests/test_queue.py \
+               tests/test_redis_integration.py -v
+      shell: bash
+      env:
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+    - name: Start API server
+      if: matrix.os != 'windows-latest'
+      run: |
+        python scripts/start_server.py --port 8000 --log-level warning &
+        sleep 8
+        curl --retry 5 --retry-delay 3 --retry-all-errors http://localhost:8000/health
+      shell: bash
+      env:
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+    - name: Run API/integration tests
+      if: matrix.os != 'windows-latest'
+      run: |
+        cd "${{ github.workspace }}"
+        python -m pytest \
+          tests/test_memory_integration.py \
+          tests/test_agent_prompt_update.py \
+          tests/test_client_agent_isolation.py \
+          tests/test_deletion_apis.py \
+          tests/test_temporal_queries.py \
+          tests/test_user.py -v
+      shell: bash
+      env:
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      continue-on-error: true
+
+    - name: Generate coverage (Ubuntu + Python 3.12 only)
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+      run: |
+        cd "${{ github.workspace }}"
+        python -m pytest tests/test_memory_server.py --cov=mirix --cov-report=html --cov-report=term
+      shell: bash
+      continue-on-error: true
+
+    - name: Upload coverage report
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: htmlcov/
+      continue-on-error: true
+

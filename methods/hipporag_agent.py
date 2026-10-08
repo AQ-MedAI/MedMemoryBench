@@ -8,20 +8,13 @@ import os
 import sys
 import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from copy import deepcopy
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
-
-import numpy as np
 
 from .base import AgentResponse, BaseAgent, MemoryBuildResult
 from utils.llm_client import (
     BaseLLMClient,
-    LLMResponse,
     create_llm_client,
-    format_messages,
     get_usage_tracker,
 )
 
@@ -111,155 +104,6 @@ class _LLMConfigProxy:
             "n": 1,
         }
 
-
-class TrackedEmbeddingWrapper:
-    """Wraps embedding calls with the same interface as HippoRAG's BaseEmbeddingModel.
-
-    Supports two modes: local (sentence-transformers) and API (OpenAI-compatible endpoint).
-    """
-
-    def __init__(
-        self,
-        provider: str = "local",
-        model: str = "BAAI/bge-small-zh-v1.5",
-        model_path: Optional[str] = None,
-        dim: Optional[int] = None,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
-        batch_size: int = 16,
-        max_seq_len: int = 512,
-        normalize: bool = True,
-        dtype: str = "auto",
-        **kwargs,
-    ):
-        self.provider = provider
-        self.model_name = model
-        self.embedding_model_name = model  # Attribute name expected by HippoRAG
-        self.model_path = model_path or model
-        self.dim = dim
-        self.batch_size = batch_size
-        self.max_seq_len = max_seq_len
-        self.normalize = normalize
-        self.dtype = dtype
-        self.api_key = api_key
-        self.base_url = base_url
-
-        # Required by HippoRAG
-        self.embedding_size = dim  # Fallback dimension for EmbeddingStore
-
-        self._model = None
-        self._openai_client = None
-        self._initialized = False
-
-    def _lazy_init(self):
-        """Lazily initialize the model on first use."""
-        if self._initialized:
-            return
-
-        if self.provider == "local":
-            self._init_local_model()
-        elif self.provider in ["openai", "api"]:
-            self._init_api_client()
-        else:
-            raise ValueError(f"Unsupported embedding provider: {self.provider}")
-
-        self._initialized = True
-
-    def _init_local_model(self):
-        """Initialize a local sentence-transformers model."""
-        try:
-            from sentence_transformers import SentenceTransformer
-
-            logger.info(f"Loading local embedding model: {self.model_path}")
-            self._model = SentenceTransformer(
-                self.model_path,
-                trust_remote_code=True,
-            )
-
-            if self.dim is None:
-                self.dim = self._model.get_sentence_embedding_dimension()
-            self.embedding_size = self.dim
-
-            logger.info(f"Embedding model loaded, dim={self.dim}")
-
-        except ImportError:
-            raise ImportError("Please install sentence-transformers: pip install sentence-transformers")
-
-    def _init_api_client(self):
-        """Initialize an OpenAI-compatible API client for embeddings."""
-        from openai import OpenAI
-
-        self._openai_client = OpenAI(
-            api_key=self.api_key or os.environ.get("OPENAI_API_KEY", "not-needed"),
-            base_url=self.base_url or os.environ.get("EMBEDDING_BASE_URL"),
-            timeout=60,
-        )
-        logger.info(f"Embedding API client initialized, model={self.model_name}")
-
-    def encode(self, texts: Union[str, List[str]], **kwargs) -> np.ndarray:
-        """Encode texts into embedding vectors.
-
-        Returns:
-            np.ndarray of shape (len(texts), dim).
-        """
-        self._lazy_init()
-
-        if isinstance(texts, str):
-            texts = [texts]
-
-        texts = [t if t and t.strip() else "empty" for t in texts]
-
-        # HippoRAG passes instruction to distinguish query vs document embeddings
-        instruction = kwargs.get("instruction", "")
-        if instruction:
-            texts = [f"{instruction}{t}" for t in texts]
-
-        if self.provider == "local":
-            embeddings = self._encode_local(texts)
-        else:
-            embeddings = self._encode_api(texts)
-
-        if self.normalize and kwargs.get("norm", True):
-            norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-            norms = np.where(norms == 0, 1, norms)
-            embeddings = embeddings / norms
-
-        return embeddings
-
-    def _encode_local(self, texts: List[str]) -> np.ndarray:
-        """Encode using the local sentence-transformers model."""
-        embeddings = self._model.encode(
-            texts,
-            batch_size=self.batch_size,
-            show_progress_bar=False,
-            normalize_embeddings=False,  # Normalization handled in encode()
-        )
-        return np.array(embeddings)
-
-    def _encode_api(self, texts: List[str]) -> np.ndarray:
-        """Encode using the OpenAI-compatible API."""
-        all_embeddings = []
-
-        for i in range(0, len(texts), self.batch_size):
-            batch = texts[i:i + self.batch_size]
-            try:
-                response = self._openai_client.embeddings.create(
-                    input=batch,
-                    model=self.model_name,
-                )
-                batch_embeddings = [item.embedding for item in response.data]
-                all_embeddings.extend(batch_embeddings)
-            except Exception as e:
-                logger.error(f"Embedding API error: {e}")
-                # Fall back to zero vectors
-                dim = self.dim or 1536
-                all_embeddings.extend([np.zeros(dim) for _ in batch])
-
-        return np.array(all_embeddings)
-
-    def batch_encode(self, texts: Union[str, List[str]], **kwargs) -> np.ndarray:
-        """Batch encode (alias for encode, provided for interface compatibility)."""
-        return self.encode(texts, **kwargs)
 
 class HippoRAGAgent(BaseAgent):
     """HippoRAG adapter for the MedMemoryBench evaluation framework.
@@ -421,19 +265,12 @@ class HippoRAGAgent(BaseAgent):
 
         logger.info("HippoRAG modules loaded successfully")
 
-    def _get_shared_embedding_model(self) -> TrackedEmbeddingWrapper:
-        """Return the singleton embedding model instance (created on first call)."""
-        if self._shared_embedding_model is None:
-            self._shared_embedding_model = TrackedEmbeddingWrapper(
-                provider=self.embedding_provider,
-                model=self.embedding_model,
-                model_path=self.embedding_model_path,
-                dim=self.embedding_dim,
-                api_key=self.embedding_api_key,
-                base_url=self.embedding_base_url,
-                batch_size=self.embedding_batch_size,
-                max_seq_len=self.embedding_max_seq_len,
-            )
+    def _get_shared_embedding_model(self):
+        """Return the shared OFFICIAL HippoRAG embedding model instance.
+
+        On first HippoRAG instance creation, the official TransformersEmbeddingModel
+        is cached here. Subsequent instances reuse it to avoid duplicate GPU loads.
+        """
         return self._shared_embedding_model
 
     def _build_hipporag_config(self, context_id: int) -> Any:
@@ -467,6 +304,7 @@ class HippoRAGAgent(BaseAgent):
             linking_top_k=self.linking_top_k,
             retrieval_top_k=self.retrieval_top_k,
             qa_top_k=self.qa_top_k,
+            qa_passage_prefix="",
             damping=self.damping,
             passage_node_weight=self.passage_node_weight,
             force_index_from_scratch=self.force_index_from_scratch,
@@ -475,13 +313,18 @@ class HippoRAGAgent(BaseAgent):
             embedding_model_name=hipporag_embedding_name,
             embedding_batch_size=self.embedding_batch_size,
             embedding_max_seq_len=self.embedding_max_seq_len,
-            embedding_return_as_normalized=True,
+            embedding_return_as_normalized=False,
         )
 
         return config
 
     def _create_tracked_hipporag(self, context_id: int) -> Any:
-        """Create a HippoRAG instance with LLM and Embedding components replaced for token tracking."""
+        """Create a HippoRAG instance with LLM replaced for token tracking.
+
+        Embedding model is kept as the official TransformersEmbeddingModel created
+        by HippoRAG.__init__(). On first call, it is cached and shared across
+        subsequent instances to avoid duplicate GPU loads.
+        """
         self._load_hipporag_modules()
         config = self._build_hipporag_config(context_id)
 
@@ -497,12 +340,41 @@ class HippoRAGAgent(BaseAgent):
             max_tokens=self.max_tokens,
         )
 
-        tracked_embedding = self._get_shared_embedding_model()
+        # Create instance - HippoRAG.__init__() will create the official
+        # TransformersEmbeddingModel and EmbeddingStores
+        # Temporarily set OPENAI_API_KEY/OPENAI_BASE_URL for CacheOpenAI init
+        # (the CacheOpenAI instance will be replaced by TrackedLLMWrapper below)
+        old_api_key = os.environ.get("OPENAI_API_KEY")
+        old_base_url = os.environ.get("OPENAI_BASE_URL")
+        try:
+            if self._api_key and not old_api_key:
+                os.environ["OPENAI_API_KEY"] = self._api_key
+            if self._base_url and not old_base_url:
+                os.environ["OPENAI_BASE_URL"] = self._base_url
+            hipporag = self._HippoRAG(global_config=config)
+        finally:
+            # Restore original env state
+            if old_api_key is None and "OPENAI_API_KEY" in os.environ:
+                del os.environ["OPENAI_API_KEY"]
+            if old_base_url is None and "OPENAI_BASE_URL" in os.environ:
+                del os.environ["OPENAI_BASE_URL"]
 
-        # Create instance then monkey-patch its internal components
-        hipporag = self._HippoRAG(global_config=config)
+        # Share the official embedding model across instances to save GPU memory
+        if self._shared_embedding_model is None:
+            # First instance: cache the official model
+            self._shared_embedding_model = hipporag.embedding_model
+            logger.info(f"Cached official embedding model: {type(hipporag.embedding_model).__name__}")
+        else:
+            # Subsequent instances: reuse the shared official model
+            hipporag.embedding_model = self._shared_embedding_model
+            if hasattr(hipporag, 'chunk_embedding_store') and hipporag.chunk_embedding_store is not None:
+                hipporag.chunk_embedding_store.embedding_model = self._shared_embedding_model
+            if hasattr(hipporag, 'entity_embedding_store') and hipporag.entity_embedding_store is not None:
+                hipporag.entity_embedding_store.embedding_model = self._shared_embedding_model
+            if hasattr(hipporag, 'fact_embedding_store') and hipporag.fact_embedding_store is not None:
+                hipporag.fact_embedding_store.embedding_model = self._shared_embedding_model
 
-        # Replace LLM model across all sub-components
+        # Replace LLM model across all sub-components (for token usage tracking)
         hipporag.llm_model = tracked_llm
 
         if hasattr(hipporag, 'openie') and hipporag.openie is not None:
@@ -510,15 +382,6 @@ class HippoRAGAgent(BaseAgent):
 
         if hasattr(hipporag, 'rerank_filter') and hipporag.rerank_filter is not None:
             hipporag.rerank_filter.llm_infer_fn = tracked_llm.infer
-
-        # Replace embedding model across all embedding stores
-        hipporag.embedding_model = tracked_embedding
-        if hasattr(hipporag, 'chunk_embedding_store') and hipporag.chunk_embedding_store is not None:
-            hipporag.chunk_embedding_store.embedding_model = tracked_embedding
-        if hasattr(hipporag, 'entity_embedding_store') and hipporag.entity_embedding_store is not None:
-            hipporag.entity_embedding_store.embedding_model = tracked_embedding
-        if hasattr(hipporag, 'fact_embedding_store') and hipporag.fact_embedding_store is not None:
-            hipporag.fact_embedding_store.embedding_model = tracked_embedding
 
         logger.info(f"HippoRAG instance created successfully")
 
@@ -777,9 +640,17 @@ class HippoRAGAgent(BaseAgent):
             }
 
         except Exception as e:
-            logger.error(f"[HippoRAG] Graph construction error: {e}")
             import traceback
-            traceback.print_exc()
+            tb_str = traceback.format_exc()
+            logger.error(
+                f"\n{'='*60}\n"
+                f"[HippoRAG] CRITICAL: Graph construction FAILED for context_id={context_id}\n"
+                f"  Exception: {type(e).__name__}: {e}\n"
+                f"  Sessions: {session_count}, Docs: {len(docs) if 'docs' in dir() else '?'}\n"
+                f"{'='*60}\n"
+                f"{tb_str}"
+                f"{'='*60}"
+            )
 
             # Clear accumulation buffer to avoid repeated attempts
             self._pending_sessions[context_id] = []
@@ -787,7 +658,8 @@ class HippoRAGAgent(BaseAgent):
             return {
                 "success": False,
                 "session_count": session_count,
-                "error": str(e),
+                "error": f"{type(e).__name__}: {e}",
+                "traceback": tb_str,
                 "time_cost": time.time() - start_time,
             }
 
@@ -855,15 +727,13 @@ class HippoRAGAgent(BaseAgent):
                 raw_docs = solution.docs[:self.qa_top_k] if solution.docs else []
                 if raw_docs and self.max_context_tokens > 0:
                     question_tokens = self.count_tokens(question)
-                    # Reserve tokens for question, QA prompt template overhead, and output
                     available_tokens = max(self.max_context_tokens - question_tokens - 500, 0)
 
                     truncated_docs = []
                     current_tokens = 0
                     for doc in raw_docs:
                         doc_text = doc if isinstance(doc, str) else str(doc)
-                        # Account for the "Wikipedia Title: {doc}\n\n" format used by HippoRAG QA
-                        format_overhead = self.count_tokens("Wikipedia Title: \n\n")
+                        format_overhead = self.count_tokens("\n\n")
                         doc_tokens = self.count_tokens(doc_text)
 
                         if current_tokens + doc_tokens + format_overhead <= available_tokens:

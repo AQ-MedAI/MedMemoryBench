@@ -1,0 +1,39 @@
+# Q2Q Ablation A5: perplexity_threshold=5.0
+method_name: "q2q"
+method_type: "agentic_memory"
+description: "Q2Q ablation - compression threshold 5.0"
+
+model:
+  provider: "openai"
+  name: "gpt-5.1"
+  temperature: 0.3
+  max_completion_tokens: 40960
+
+agent_params:
+  q2q_project_path: "../Agent_Memory/Q2Q"
+  language: "en"
+  storage_backend: "chromadb"
+  embedding_device: "cpu"
+  proposition_mode: "llm"
+  compressor_model: "models/Qwen2.5-0.5B-Instruct"
+  compressor_device: "cpu"
+  perplexity_threshold: 5.0
+  nlp_inference_model: "models/flan-t5-base"
+  top_k_per_sub: 20
+  top_n: 5
+  top_k_q2c: 3
+  num_fake_queries: 15
+  chain_depth: 3
+  prop_top_k_per_fq: 3
+  binding_verify_threshold: 0.8
+  max_context_tokens: 64000
+  evolve_threshold: 0.6
+  diverge_low: 0.2
+  diverge_high: 0.6
+  max_parents: 3
+  max_chain_length: 5
+
+embedding:
+  provider: "local"
+  model: "bge-small-en-v1.5"
+  model_path: "models/bge-small-en-v1.5"

@@ -24,6 +24,7 @@ class AgentManager:
         "lightmem": ("methods.lightmem_agent", "LightMemAgent"),
         "remem": ("methods.remem_agent", "RememAgent"),
         "hipporag": ("methods.hipporag_agent", "HippoRAGAgent"),
+        "q2q_v1": ("methods.q2q_v1_agent", "Q2QV1BenchAgent"),
         "q2q": ("methods.q2q_agent", "Q2QBenchAgent"),
     }
 
@@ -127,6 +128,8 @@ class AgentManager:
                 params["embedding_provider"] = self.method_config.embedding.provider
                 if self.method_config.embedding.model_path:
                     params["embedding_model_path"] = self.method_config.embedding.model_path
+                if self.method_config.embedding.dim:
+                    params["embedding_dim"] = self.method_config.embedding.dim
 
         elif method_key == "amem":
             params.update({
@@ -135,9 +138,8 @@ class AgentManager:
                 "amem_model": agent_params.get("amem_model", model_config.name),
                 "amem_embedding_model": agent_params.get("amem_embedding_model", "all-MiniLM-L6-v2"),
                 "amem_evo_threshold": agent_params.get("amem_evo_threshold", 100),
-                "amem_max_tokens": agent_params.get("amem_max_tokens"),
-                "amem_max_context_tokens": agent_params.get("amem_max_context_tokens", 200000),
-                "amem_chunk_size_tokens": agent_params.get("amem_chunk_size_tokens"),
+                "amem_max_tokens": agent_params.get("amem_max_tokens", 2000),
+                "max_context_tokens": agent_params.get("max_context_tokens", 100000),
             })
 
         elif method_key == "letta":
@@ -178,30 +180,28 @@ class AgentManager:
                 "memos_backend": agent_params.get("memos_backend", "openai"),
                 "memos_model": agent_params.get("memos_model", model_config.name),
                 "text_mem_type": agent_params.get("text_mem_type", "general_text"),
-                "embedding_dim": agent_params.get("embedding_dim"),
-                "observability_search": agent_params.get("observability_search", True),
                 "max_input_tokens": agent_params.get("max_input_tokens", 8000),
                 "max_question_tokens": agent_params.get("max_question_tokens", 4096),
                 "max_context_tokens": agent_params.get("max_context_tokens", 120000),
             })
+            if agent_params.get("max_memory_tokens") is not None:
+                params["max_memory_tokens"] = agent_params["max_memory_tokens"]
             if self.method_config.embedding:
                 params["embedding_model"] = self.method_config.embedding.model
                 params["embedding_provider"] = self.method_config.embedding.provider
                 if self.method_config.embedding.model_path:
                     params["embedding_model_path"] = self.method_config.embedding.model_path
+                if self.method_config.embedding.dim:
+                    params["embedding_dim"] = self.method_config.embedding.dim
 
         elif method_key == "mirix":
             params.update({
                 "retrieve_num": agent_params.get("retrieve_num", 5),
                 "memorize_chunk_tokens": agent_params.get("memorize_chunk_tokens", 2500),
                 "memorize_chunk_overlap_tokens": agent_params.get("memorize_chunk_overlap_tokens", 200),
-                "query_memory_item_tokens": agent_params.get("query_memory_item_tokens", 300),
-                "query_memory_context_tokens": agent_params.get("query_memory_context_tokens", 1800),
                 "max_input_tokens": agent_params.get("max_input_tokens", 8000),
                 "max_question_tokens": agent_params.get("max_question_tokens", 4096),
                 "max_context_tokens": agent_params.get("max_context_tokens", 120000),
-                # Query mode: use MIRIX native send_message for memory-aware responses
-                "use_native_query": agent_params.get("use_native_query", True),
             })
             if self.method_config.embedding:
                 params["embedding_model"] = self.method_config.embedding.model
@@ -262,12 +262,16 @@ class AgentManager:
                 # Embedding (default, may be overridden below)
                 "embedding_model": agent_params.get("embedding_model", "all-MiniLM-L6-v2"),
                 "embedding_provider": agent_params.get("embedding_provider", "local"),
+                # Dataset awareness for evaluation mode adaptation
+                "dataset_name": self.dataset_config.dataset_name,
             })
             if self.method_config.embedding:
                 params["embedding_model"] = self.method_config.embedding.model
                 params["embedding_provider"] = self.method_config.embedding.provider
                 if self.method_config.embedding.model_path:
                     params["embedding_model_path"] = self.method_config.embedding.model_path
+                if self.method_config.embedding.dim:
+                    params["embedding_dim"] = self.method_config.embedding.dim
 
         elif method_key == "zep":
             params.update({
@@ -304,6 +308,8 @@ class AgentManager:
 
         elif method_key == "lightmem":
             params.update({
+                # Dataset awareness for prompt template selection
+                "dataset_name": self.dataset_config.dataset_name,
                 # Retrieval configuration
                 "retrieve_num": agent_params.get("retrieve_num", 5),
                 # LightMem core feature switches
@@ -339,15 +345,17 @@ class AgentManager:
         elif method_key == "remem":
             # ReMem: Reasoning with Episodic Memory
             params.update({
+                # Dataset awareness for prompt template routing
+                "dataset_name": self.dataset_config.dataset_name,
                 # Information extraction method
                 "extract_method": agent_params.get("extract_method", "episodic_gist"),
                 # Graph configuration
                 "is_directed_graph": agent_params.get("is_directed_graph", False),
                 "synonymy_edge_sim_threshold": agent_params.get("synonymy_edge_sim_threshold", 0.8),
-                "synonymy_edge_topk": agent_params.get("synonymy_edge_topk", 10),
+                "synonymy_edge_topk": agent_params.get("synonymy_edge_topk", 2047),
                 # Retrieval configuration
-                "retrieval_top_k": agent_params.get("retrieval_top_k", 20),
-                "qa_top_k": agent_params.get("qa_top_k", 10),
+                "retrieval_top_k": agent_params.get("retrieval_top_k", 200),
+                "qa_top_k": agent_params.get("qa_top_k", 5),
                 "linking_top_k": agent_params.get("linking_top_k", 5),
                 "damping": agent_params.get("damping", 0.5),
                 "passage_node_weight": agent_params.get("passage_node_weight", 0.05),
@@ -363,7 +371,7 @@ class AgentManager:
                 "extraction_max_workers": agent_params.get("extraction_max_workers", 5),
                 # Text preprocessing
                 "text_preprocessor_class_name": agent_params.get(
-                    "text_preprocessor_class_name", "SentenceWindowPreprocessor"
+                    "text_preprocessor_class_name", "TextPreprocessor"
                 ),
                 # Chunking configuration
                 "chunk_size_tokens": agent_params.get("chunk_size_tokens", 8000),
@@ -436,21 +444,60 @@ class AgentManager:
                 if self.method_config.embedding.base_url:
                     params["embedding_base_url"] = self.method_config.embedding.base_url
 
-        elif method_key == "q2q":
+        elif method_key == "q2q_v1":
             params.update({
                 "q2q_project_path": agent_params.get("q2q_project_path", ""),
+                # Retrieval (v1 params)
                 "alpha": agent_params.get("alpha", 0.7),
                 "top_k_per_sub": agent_params.get("top_k_per_sub", 20),
                 "top_n": agent_params.get("top_n", 5),
                 "top_k_q2c": agent_params.get("top_k_q2c", 3),
                 "num_fake_queries": agent_params.get("num_fake_queries", 10),
-                "storage_backend": agent_params.get("storage_backend", "chromadb"),
-                "language": agent_params.get("language", "zh"),
-                "max_context_tokens": agent_params.get("max_context_tokens", 120000),
-                "embedding_device": agent_params.get("embedding_device", "cpu"),
                 "version_threshold": agent_params.get("version_threshold", 0.80),
                 "version_chain_depth": agent_params.get("version_chain_depth", 3),
                 "fq_confidence_threshold": agent_params.get("fq_confidence_threshold", 0.80),
+                "paragraph_top_k": agent_params.get("paragraph_top_k", 3),
+                "max_context_tokens": agent_params.get("max_context_tokens", 120000),
+                # General
+                "storage_backend": agent_params.get("storage_backend", "chromadb"),
+                "language": agent_params.get("language", "zh"),
+                "embedding_device": agent_params.get("embedding_device", "cpu"),
+            })
+            if self.method_config.embedding:
+                params["embedding_model"] = self.method_config.embedding.model
+                params["embedding_provider"] = self.method_config.embedding.provider
+                if self.method_config.embedding.model_path:
+                    params["embedding_model_path"] = self.method_config.embedding.model_path
+
+        elif method_key == "q2q":
+            params.update({
+                "q2q_project_path": agent_params.get("q2q_project_path", ""),
+                # Retrieval
+                "alpha": agent_params.get("alpha", 0.7),
+                "top_k_per_sub": agent_params.get("top_k_per_sub", 20),
+                "top_n": agent_params.get("top_n", 5),
+                "top_k_q2c": agent_params.get("top_k_q2c", 3),
+                "num_fake_queries": agent_params.get("num_fake_queries", 10),
+                "chain_depth": agent_params.get("chain_depth", 3),
+                "prop_top_k_per_fq": agent_params.get("prop_top_k_per_fq", 3),
+                "binding_verify_threshold": agent_params.get("binding_verify_threshold", 0.8),
+                "max_context_tokens": agent_params.get("max_context_tokens", 120000),
+                # Preprocessing
+                "proposition_mode": agent_params.get("proposition_mode", "llm"),
+                "compressor_model": agent_params.get("compressor_model", ""),
+                "compressor_device": agent_params.get("compressor_device", "cpu"),
+                "perplexity_threshold": agent_params.get("perplexity_threshold", 5.0),
+                "nlp_inference_model": agent_params.get("nlp_inference_model", ""),
+                # Graph
+                "evolve_threshold": agent_params.get("evolve_threshold", 0.6),
+                "diverge_low": agent_params.get("diverge_low", 0.2),
+                "diverge_high": agent_params.get("diverge_high", 0.6),
+                "max_parents": agent_params.get("max_parents", 3),
+                "max_chain_length": agent_params.get("max_chain_length", 6),
+                # General
+                "storage_backend": agent_params.get("storage_backend", "chromadb"),
+                "language": agent_params.get("language", "zh"),
+                "embedding_device": agent_params.get("embedding_device", "cpu"),
             })
             if self.method_config.embedding:
                 params["embedding_model"] = self.method_config.embedding.model
@@ -529,7 +576,8 @@ class AgentManager:
             "output": response.output,
             "query_time": query_time,
             "retrieved_count": response.retrieved_count,
-            "retrieved_memories": response.retrieved_memories, 
+            "retrieved_memories": response.retrieved_memories,
+            "extra": response.extra,
         }
 
     def reset(self) -> None:
@@ -542,6 +590,10 @@ class AgentManager:
         self._context_id = context_id
         if self._agent:
             self._agent.set_context_id(context_id)
+
+    def send_query_feedback(self, score: float, is_correct: bool, **kwargs) -> None:
+        if self._agent:
+            self._agent.on_query_feedback(score=score, is_correct=is_correct, **kwargs)
 
     def get_info(self) -> Dict[str, Any]:
         info = {

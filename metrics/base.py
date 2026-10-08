@@ -20,6 +20,7 @@ class MetricResult:
     query_time: float = 0.0
     retrieved_memories: List[Dict[str, Any]] = field(default_factory=list)
     retrieved_count: int = 0
+    extra: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -35,6 +36,7 @@ class MetricResult:
             "query_time": self.query_time,
             "retrieved_memories": self.retrieved_memories,
             "retrieved_count": self.retrieved_count,
+            "extra": self.extra,
         }
 
 

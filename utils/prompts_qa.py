@@ -256,4 +256,201 @@ CRITICAL INSTRUCTIONS:
 
 Answer:""",
 
+    # LongMemEval - Default (used for all question types)
+    "longmemeval_default_qa": """Based on {memory_source}, answer the following question.
+
+Current date: {question_date}
+
+Question: {question}
+
+Answer concisely and directly.
+
+Answer:""",
+
+    # LongMemEval - single-session-user
+    "longmemeval_single-session-user_qa": """Based on {memory_source}, answer the following question about information the user mentioned in a conversation.
+
+Current date: {question_date}
+
+Question: {question}
+
+Provide a concise and direct answer.
+
+Answer:""",
+
+    # LongMemEval - single-session-assistant
+    "longmemeval_single-session-assistant_qa": """Based on {memory_source}, answer the following question about information the assistant provided in a conversation.
+
+Current date: {question_date}
+
+Question: {question}
+
+Provide a concise and direct answer.
+
+Answer:""",
+
+    # LongMemEval - single-session-preference
+    "longmemeval_single-session-preference_qa": """Based on {memory_source}, answer the following question about the user's personal preferences or habits mentioned in a conversation.
+
+Current date: {question_date}
+
+Question: {question}
+
+Provide a personalized answer based on what you know about the user.
+
+Answer:""",
+
+    # LongMemEval - multi-session
+    "longmemeval_multi-session_qa": """Based on {memory_source}, answer the following question that may require combining information from multiple conversations.
+
+Current date: {question_date}
+
+Question: {question}
+
+Provide a concise and direct answer.
+
+Answer:""",
+
+    # LongMemEval - temporal-reasoning
+    "longmemeval_temporal-reasoning_qa": """Based on {memory_source}, answer the following question that involves temporal reasoning about events across conversations.
+
+Current date: {question_date}
+
+Question: {question}
+
+Provide a concise and direct answer.
+
+Answer:""",
+
+    # LongMemEval - knowledge-update
+    "longmemeval_knowledge-update_qa": """Based on {memory_source}, answer the following question. Note that information may have been updated over time - provide the most recent/updated answer.
+
+Current date: {question_date}
+
+Question: {question}
+
+Provide the most up-to-date answer.
+
+Answer:""",
+
+    # =========================================================================
+    # AMA-Bench - Agent trajectory memory QA templates
+    # =========================================================================
+
+    "ama_bench_default_qa": """Based on {memory_source} of the agent's trajectory, answer the following question.
+
+Question: {question}
+
+Provide a concise and direct answer.
+
+Answer:""",
+
+    "ama_bench_recall_qa": """Based on {memory_source} of the agent's trajectory, answer the following question about specific actions or observations from the trajectory.
+
+Question: {question}
+
+Provide a concise and direct answer based on what you recall from the trajectory.
+
+Answer:""",
+
+    "ama_bench_causal_inference_qa": """Based on {memory_source} of the agent's trajectory, answer the following question about cause-effect relationships between actions and outcomes.
+
+Question: {question}
+
+Provide a clear answer explaining the causal relationship based on the trajectory.
+
+Answer:""",
+
+    "ama_bench_state_updating_qa": """Based on {memory_source} of the agent's trajectory, answer the following question about state changes that occurred during task execution.
+
+Question: {question}
+
+Provide a concise answer reflecting the relevant state transitions from the trajectory.
+
+Answer:""",
+
+    "ama_bench_state_abstraction_qa": """Based on {memory_source} of the agent's trajectory, answer the following question requiring high-level understanding of the agent's state and strategy.
+
+Question: {question}
+
+Provide a clear and comprehensive answer based on your understanding of the overall trajectory.
+
+Answer:""",
+
+    # =========================================================================
+    # LongMemEval-V2 - Web agent trajectory memory QA templates
+    # =========================================================================
+
+    "longmemeval_v2_default_qa": """Based on {memory_source}, answer the following question about web-agent task trajectories.
+
+Question: {question}
+
+Important: Enclose your final answer in \\boxed{{}}.
+If the question cannot be answered based on the available information, respond with \\boxed{{UNKNOWN}}.
+
+Answer:""",
+
+    "longmemeval_v2_static-environment_qa": """Based on {memory_source}, answer the following question about the state of a web environment observed during agent task execution.
+
+Question: {question}
+
+Important: Enclose your final answer in \\boxed{{}}.
+If you do not know the answer, output exactly \\boxed{{UNKNOWN}}.
+
+Answer:""",
+
+    "longmemeval_v2_static-environment-abs_qa": """Based on {memory_source}, answer the following question about the state of a web environment observed during agent task execution.
+
+Question: {question}
+
+Important: Enclose your final answer in \\boxed{{}}.
+If the question cannot be answered based on the available information or the premise of the question is incorrect, output exactly \\boxed{{UNKNOWN}} and briefly explain why.
+
+Answer:""",
+
+    "longmemeval_v2_dynamic-environment_qa": """Based on {memory_source}, answer the following question about changes that occurred in the web environment during agent task execution.
+
+Question: {question}
+
+Important: Enclose your final answer in \\boxed{{}}.
+If you do not know the answer, output exactly \\boxed{{UNKNOWN}}.
+
+Answer:""",
+
+    "longmemeval_v2_dynamic-environment-abs_qa": """Based on {memory_source}, answer the following question about changes that occurred in the web environment during agent task execution.
+
+Question: {question}
+
+Important: Enclose your final answer in \\boxed{{}}.
+If the question cannot be answered based on the available information or the premise of the question is incorrect, output exactly \\boxed{{UNKNOWN}} and briefly explain why.
+
+Answer:""",
+
+    "longmemeval_v2_procedure_qa": """Based on {memory_source}, answer the following question about the workflow or procedure followed during agent task execution.
+
+Question: {question}
+
+Important: Enclose your final answer in \\boxed{{}}.
+If you do not know the answer, output exactly \\boxed{{UNKNOWN}}.
+
+Answer:""",
+
+    "longmemeval_v2_procedure-abs_qa": """Based on {memory_source}, answer the following question about the workflow or procedure followed during agent task execution.
+
+Question: {question}
+
+Important: Enclose your final answer in \\boxed{{}}.
+If the question cannot be answered based on the available information or the premise of the question is incorrect, output exactly \\boxed{{UNKNOWN}} and briefly explain why.
+
+Answer:""",
+
+    "longmemeval_v2_errors-gotchas_qa": """Based on {memory_source}, answer the following question about errors, gotchas, or unexpected issues encountered during agent task execution in the web environment.
+
+Question: {question}
+
+Important: Enclose your final answer in \\boxed{{}}.
+If you believe the question's premise is wrong, provide an explanation in \\boxed{{}} explaining why the question is flawed.
+
+Answer:""",
+
 }

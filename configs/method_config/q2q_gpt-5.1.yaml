@@ -1,0 +1,51 @@
+# Q2Q Agent Configuration
+# Query-to-Query dual-path memory retrieval with proposition-based FQ generation
+
+method_name: "q2q"
+method_type: "agentic_memory"
+description: "Q2Q - Proposition-based fake query generation + temporal DAG + dual-path retrieval"
+
+model:
+  provider: "openai"
+  name: "gpt-5.1"
+  temperature: 0.3
+  max_completion_tokens: 40960
+
+agent_params:
+  # Q2Q project path (relative to MedMemoryBench root)
+  q2q_project_path: "../Agent_Memory/Q2Q"
+  language: "en"
+  storage_backend: "chromadb"
+  embedding_device: "cpu"
+
+  # Preprocessing
+  proposition_mode: "llm"
+  compressor_model: "models/Qwen2.5-0.5B-Instruct"
+  compressor_device: "cpu"
+  # Empirically chosen: safe on both EN dialogue (drops only filler, ~1% chars)
+  # and ZH medical text (0 info loss with list-item protection); NLL median is 4.4/5.2
+  perplexity_threshold: 2.5
+  nlp_inference_model: "models/flan-t5-base"
+
+  # Retrieval
+  top_k_per_sub: 20
+  top_n: 5
+  top_k_q2c: 3
+  num_fake_queries: 15
+  chain_depth: 3
+  prop_top_k_per_fq: 3
+  binding_verify_threshold: 0.8
+  max_context_tokens: 64000
+
+  # Graph
+  evolve_threshold: 0.6
+  diverge_low: 0.2
+  diverge_high: 0.6
+  max_parents: 3
+  max_chain_length: 5
+  max_chain_nodes: 60
+
+embedding:
+  provider: "local"
+  model: "bge-small-en-v1.5"
+  model_path: "models/bge-small-en-v1.5"

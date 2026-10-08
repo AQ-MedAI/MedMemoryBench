@@ -8,14 +8,14 @@ model:
   provider: "openai"
   name: "gpt-5.1"
   temperature: 0.3
-  max_completion_tokens: 10000
+  max_completion_tokens: 40960
 
 agent_params:
   top_k: 5
   chunk_size: 4096
   chunk_overlap: 50
-  max_context_tokens: 10000
+  max_context_tokens: 64000
 
 embedding:
   provider: "local"
-  model: "models/bge-small-zh-v1.5"
+  model: "models/bge-small-en-v1.5"

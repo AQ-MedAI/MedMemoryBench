@@ -477,6 +477,27 @@ Output in the following JSON format:
 
 Output JSON only, no other content.""",
 
+    # LongMemEval - single-session-user / single-session-assistant / multi-session
+    # NOTE: These prompts exactly follow the original LongMemEval paper (evaluate_qa.py)
+    # to ensure comparable results. Format: "Answer yes or no only."
+    "longmemeval_single-session-user_judge": """I will give you a question, a correct answer, and a response from a model. Please answer yes if the response contains the correct answer. Otherwise, answer no. If the response is equivalent to the correct answer or contains all the intermediate steps to get the correct answer, you should also answer yes. If the response only contains a subset of the information required by the answer, answer no. \n\nQuestion: {question}\n\nCorrect Answer: {expected_answer}\n\nModel Response: {model_output}\n\nIs the model response correct? Answer yes or no only.""",
+
+    "longmemeval_single-session-assistant_judge": """I will give you a question, a correct answer, and a response from a model. Please answer yes if the response contains the correct answer. Otherwise, answer no. If the response is equivalent to the correct answer or contains all the intermediate steps to get the correct answer, you should also answer yes. If the response only contains a subset of the information required by the answer, answer no. \n\nQuestion: {question}\n\nCorrect Answer: {expected_answer}\n\nModel Response: {model_output}\n\nIs the model response correct? Answer yes or no only.""",
+
+    "longmemeval_multi-session_judge": """I will give you a question, a correct answer, and a response from a model. Please answer yes if the response contains the correct answer. Otherwise, answer no. If the response is equivalent to the correct answer or contains all the intermediate steps to get the correct answer, you should also answer yes. If the response only contains a subset of the information required by the answer, answer no. \n\nQuestion: {question}\n\nCorrect Answer: {expected_answer}\n\nModel Response: {model_output}\n\nIs the model response correct? Answer yes or no only.""",
+
+    # LongMemEval - temporal-reasoning
+    "longmemeval_temporal-reasoning_judge": """I will give you a question, a correct answer, and a response from a model. Please answer yes if the response contains the correct answer. Otherwise, answer no. If the response is equivalent to the correct answer or contains all the intermediate steps to get the correct answer, you should also answer yes. If the response only contains a subset of the information required by the answer, answer no. In addition, do not penalize off-by-one errors for the number of days. If the question asks for the number of days/weeks/months, etc., and the model makes off-by-one errors (e.g., predicting 19 days when the answer is 18), the model's response is still correct. \n\nQuestion: {question}\n\nCorrect Answer: {expected_answer}\n\nModel Response: {model_output}\n\nIs the model response correct? Answer yes or no only.""",
+
+    # LongMemEval - knowledge-update
+    "longmemeval_knowledge-update_judge": """I will give you a question, a correct answer, and a response from a model. Please answer yes if the response contains the correct answer. Otherwise, answer no. If the response contains some previous information along with an updated answer, the response should be considered as correct as long as the updated answer is the required answer.\n\nQuestion: {question}\n\nCorrect Answer: {expected_answer}\n\nModel Response: {model_output}\n\nIs the model response correct? Answer yes or no only.""",
+
+    # LongMemEval - single-session-preference
+    "longmemeval_single-session-preference_judge": """I will give you a question, a rubric for desired personalized response, and a response from a model. Please answer yes if the response satisfies the desired response. Otherwise, answer no. The model does not need to reflect all the points in the rubric. The response is correct as long as it recalls and utilizes the user's personal information correctly.\n\nQuestion: {question}\n\nRubric: {expected_answer}\n\nModel Response: {model_output}\n\nIs the model response correct? Answer yes or no only.""",
+
+    # LongMemEval - abstention
+    "longmemeval_abstention_judge": """I will give you an unanswerable question, an explanation, and a response from a model. Please answer yes if the model correctly identifies the question as unanswerable. The model could say that the information is incomplete, or some other information is given but the asked information is not.\n\nQuestion: {question}\n\nExplanation: {expected_answer}\n\nModel Response: {model_output}\n\nDoes the model correctly identify the question as unanswerable? Answer yes or no only.""",
+
     # MedMemoryBench - English: Multi-hop Clinical Deduction
     "medmemorybench_en_multi_hop_clinical_deduction_judge": """You are an **extremely strict** medical multi-hop reasoning evaluation judge. Your task is to rigorously verify whether the model truly retrieved and used specific information from the patient's historical memory to perform multi-hop clinical reasoning.
 
@@ -597,5 +618,74 @@ Output your strict evaluation result in the following JSON format:
 }}
 
 Output JSON only, no other content.""",
+
+    # =========================================================================
+    # AMA-Bench - Binary yes/no judge matching official implementation
+    # All QA types use the same prompt structure from compute_llm_as_judge()
+    # =========================================================================
+
+    "ama_bench_recall_judge": """You are an expert evaluator. You will be given a question, a reference answer, and a predicted answer.
+Your task is to determine if the predicted answer is correct based on:
+1. Factual correctness compared to the reference
+2. Completeness of the answer
+3. Relevance to the question
+
+Question: {question}
+
+Reference Answer: {expected_answer}
+
+Predicted Answer: {model_output}
+
+Is the predicted answer correct? Respond with ONLY "yes" or "no". Do not include any thinking process, explanation, or additional text.
+
+Answer:""",
+
+    "ama_bench_causal_inference_judge": """You are an expert evaluator. You will be given a question, a reference answer, and a predicted answer.
+Your task is to determine if the predicted answer is correct based on:
+1. Factual correctness compared to the reference
+2. Completeness of the answer
+3. Relevance to the question
+
+Question: {question}
+
+Reference Answer: {expected_answer}
+
+Predicted Answer: {model_output}
+
+Is the predicted answer correct? Respond with ONLY "yes" or "no". Do not include any thinking process, explanation, or additional text.
+
+Answer:""",
+
+    "ama_bench_state_updating_judge": """You are an expert evaluator. You will be given a question, a reference answer, and a predicted answer.
+Your task is to determine if the predicted answer is correct based on:
+1. Factual correctness compared to the reference
+2. Completeness of the answer
+3. Relevance to the question
+
+Question: {question}
+
+Reference Answer: {expected_answer}
+
+Predicted Answer: {model_output}
+
+Is the predicted answer correct? Respond with ONLY "yes" or "no". Do not include any thinking process, explanation, or additional text.
+
+Answer:""",
+
+    "ama_bench_state_abstraction_judge": """You are an expert evaluator. You will be given a question, a reference answer, and a predicted answer.
+Your task is to determine if the predicted answer is correct based on:
+1. Factual correctness compared to the reference
+2. Completeness of the answer
+3. Relevance to the question
+
+Question: {question}
+
+Reference Answer: {expected_answer}
+
+Predicted Answer: {model_output}
+
+Is the predicted answer correct? Respond with ONLY "yes" or "no". Do not include any thinking process, explanation, or additional text.
+
+Answer:""",
 
 }

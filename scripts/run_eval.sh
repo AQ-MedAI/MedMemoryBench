@@ -6,8 +6,8 @@ echo "=========================================="
 echo "Evaluation Framework"
 echo "=========================================="
 
-METHOD="${1:-letta_gpt-5.1}"
-DATASET="${2:-locomo}"
+METHOD="${1:-memos_gpt-5.1}"
+DATASET="${2:-ama_bench}"
 shift 2 2>/dev/null || true
 
 echo "Method: $METHOD"

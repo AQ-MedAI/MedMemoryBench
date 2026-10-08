@@ -106,6 +106,12 @@ def _ensure_evaluators_registered():
         from benchmarks.medmemorybench.evaluator import evaluate_medmemorybench  # noqa: F401
     if "locomo" not in DATASET_EVALUATOR_REGISTRY:
         from benchmarks.locomo.evaluator import evaluate_locomo  # noqa: F401
+    if "longmemeval" not in DATASET_EVALUATOR_REGISTRY:
+        from benchmarks.longmemeval.evaluator import evaluate_longmemeval  # noqa: F401
+    if "longmemeval_v2" not in DATASET_EVALUATOR_REGISTRY:
+        from benchmarks.longmemeval_v2.evaluator import evaluate_longmemeval_v2  # noqa: F401
+    if "ama_bench" not in DATASET_EVALUATOR_REGISTRY:
+        from benchmarks.ama_bench.evaluator import evaluate_ama_bench  # noqa: F401
 
 
 def create_evaluator(

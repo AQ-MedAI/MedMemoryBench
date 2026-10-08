@@ -128,7 +128,7 @@ class OpenAILLM(LLMBase):
         params = {
             "model": self.config.model,
             "messages": messages,
-            "temperature": 1,
+            "temperature": self.config.temperature,
             "max_completion_tokens": self.config.max_tokens,
         }
 

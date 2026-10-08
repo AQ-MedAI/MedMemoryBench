@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Union
 
 from metrics import MetricResult
 
@@ -35,9 +35,9 @@ class ResultCollector:
 
     def __init__(self):
         self._results: List[MetricResult] = []
-        self._results_by_context: Dict[int, List[MetricResult]] = {}
+        self._results_by_context: Dict[Union[int, str], List[MetricResult]] = {}
 
-    def add_result(self, result: MetricResult, context_id: Optional[int] = None) -> None:
+    def add_result(self, result: MetricResult, context_id: Optional[Union[int, str]] = None) -> None:
         self._results.append(result)
 
         if context_id is not None:
@@ -48,10 +48,10 @@ class ResultCollector:
     def get_all_results(self) -> List[MetricResult]:
         return self._results.copy()
 
-    def get_results_by_context(self, context_id: int) -> List[MetricResult]:
+    def get_results_by_context(self, context_id: Union[int, str]) -> List[MetricResult]:
         return self._results_by_context.get(context_id, []).copy()
 
-    def get_context_ids(self) -> List[int]:
+    def get_context_ids(self) -> List[Union[int, str]]:
         return list(self._results_by_context.keys())
 
     def save_reports(
@@ -103,6 +103,8 @@ class ResultCollector:
             "efficiency": report.summary.get("efficiency", {}),
             "memory_build_summary": report.metadata.get("memory_build_summary", {}),
             "llm_usage": report.metadata.get("llm_usage", {}),
+            "dataset_specific_metrics": report.metadata.get("lme_v2_metrics",
+                                        report.metadata.get("dataset_specific_metrics", {})),
             "config": {
                 "evaluation_mode": report.metadata.get("evaluation_mode", ""),
                 "evaluation_interval": report.metadata.get("evaluation_interval", 0),
@@ -164,6 +166,44 @@ class ResultCollector:
                     "total_time": log.get("total_time", 0.0),
                     "total_passages": log.get("total_passages", 0),
                     "session_builds": processed_sessions,
+                }
+
+            # Check if this is the batch_builds format (LongMemEval)
+            elif "batch_builds" in log:
+                processed_batches = []
+                for bb in log.get("batch_builds", []):
+                    build_result = bb.get("build_result", {})
+                    processed_batches.append({
+                        "batch_index": bb.get("batch_index"),
+                        "session_count": bb.get("session_count", 0),
+                        "input_chars": bb.get("input_chars", 0),
+                        "input_tokens_est": bb.get("input_tokens_est", 0),
+                        "time_cost": bb.get("time_cost", 0.0),
+                        "method": build_result.get("method", ""),
+                        "action": build_result.get("action", ""),
+                        "input_content": build_result.get("input_content", ""),
+                        "stored_content": build_result.get("stored_content", ""),
+                        "extraction_result": build_result.get("extraction_result", ""),
+                        "all_passages": build_result.get("all_passages", []),
+                        "memory_entries": build_result.get("memory_entries", []),
+                        "chunk_count": build_result.get("chunk_count", 0),
+                        "extra": {
+                            k: v for k, v in build_result.items()
+                            if k not in ["method", "action", "time_cost", "input_content",
+                                        "stored_content", "extraction_result", "all_passages",
+                                        "memory_entries", "chunk_count", "success"]
+                        },
+                        "error": bb.get("error"),
+                    })
+
+                processed_unit = {
+                    "unit_id": log.get("unit_id"),
+                    "context_id": log.get("context_id"),
+                    "session_count": log.get("session_count", 0),
+                    "batch_count": log.get("batch_count", 0),
+                    "sessions_per_batch": log.get("sessions_per_batch", 0),
+                    "total_time": log.get("total_time", 0.0),
+                    "batch_builds": processed_batches,
                 }
 
             # Check if this is the new chunk_builds format (LoCoMo)
@@ -274,6 +314,7 @@ class ResultCollector:
                 "retrieved_count": result.get("retrieved_count", 0),
                 "query_time": result.get("query_time", 0.0),
                 "evaluation_details": result.get("details", {}),
+                "extra": result.get("extra", {}),
             }
             query_details.append(query_detail)
 

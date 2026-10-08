@@ -57,6 +57,7 @@ class LLMUsageTracker:
     def _init(self):
         self._memorize_usage = TokenUsage()
         self._query_usage = TokenUsage()
+        self._evaluation_usage = TokenUsage()
         self._current_phase = "unknown"
 
     def set_phase(self, phase: str) -> None:
@@ -65,21 +66,26 @@ class LLMUsageTracker:
     def record(self, response: "LLMResponse") -> None:
         if self._current_phase == "memorize":
             self._memorize_usage.add(response.input_tokens, response.output_tokens, response.latency)
+        elif self._current_phase == "evaluation":
+            self._evaluation_usage.add(response.input_tokens, response.output_tokens, response.latency)
         else:
             self._query_usage.add(response.input_tokens, response.output_tokens, response.latency)
 
     def reset(self) -> None:
         self._memorize_usage = TokenUsage()
         self._query_usage = TokenUsage()
+        self._evaluation_usage = TokenUsage()
         self._current_phase = "unknown"
 
     def get_stats(self) -> Dict[str, Any]:
         total = TokenUsage()
         total.merge(self._memorize_usage)
         total.merge(self._query_usage)
+        total.merge(self._evaluation_usage)
         return {
             "memorize_phase": self._memorize_usage.to_dict(),
             "query_phase": self._query_usage.to_dict(),
+            "evaluation_phase": self._evaluation_usage.to_dict(),
             "total": total.to_dict(),
         }
 
@@ -156,19 +162,17 @@ def _is_retryable_exception(exc: Exception) -> Tuple[bool, str]:
         "internal server error",
         "overloaded",
         "capacity",
+        "invalid token",
     ]
 
     for keyword in retryable_keywords:
         if keyword in exc_message:
             return True, f"Contains retryable keyword: {keyword}"
 
-    # Non-retryable exceptions
+    # Non-retryable exceptions (skip "invalid token" which is retryable above)
     non_retryable_keywords = [
-        "authentication",
         "invalid api key",
         "invalid_api_key",
-        "unauthorized",
-        "401",
         "invalid request",
         "bad request",
         "400",

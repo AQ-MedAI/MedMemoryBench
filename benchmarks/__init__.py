@@ -6,10 +6,14 @@ from typing import Dict, Type, Optional
 from .base import BaseDataset, Session, Query, EvaluationUnit
 from .medmemorybench import MedMemoryBenchDataset
 from .locomo import LoCoMoDataset
+from .longmemeval_v2 import LongMemEvalV2Dataset
+from .ama_bench import AMABenchDataset
 
 DATASET_REGISTRY: Dict[str, Type[BaseDataset]] = {
     "medmemorybench": MedMemoryBenchDataset,
     "locomo": LoCoMoDataset,
+    "longmemeval_v2": LongMemEvalV2Dataset,
+    "ama_bench": AMABenchDataset,
 }
 
 
@@ -33,6 +37,8 @@ __all__ = [
     "EvaluationUnit",
     "MedMemoryBenchDataset",
     "LoCoMoDataset",
+    "LongMemEvalV2Dataset",
+    "AMABenchDataset",
     "create_dataset",
     "DATASET_REGISTRY",
 ]

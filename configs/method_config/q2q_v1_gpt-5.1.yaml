@@ -1,0 +1,36 @@
+# Q2Q v1 Agent Configuration
+# Query-to-Query dual-path memory retrieval with version DAG (no proposition preprocessing)
+
+method_name: "q2q_v1"
+method_type: "agentic_memory"
+description: "Q2Q v1 - FQ generation + version DAG + dual-path retrieval"
+
+model:
+  provider: "openai"
+  name: "gpt-5.1"
+  temperature: 0.3
+  max_completion_tokens: 40960
+
+agent_params:
+  # Q2Q v1 project path (relative to MedMemoryBench root)
+  q2q_project_path: "../Agent_Memory/Q2Q_v1"
+  language: "en"
+  storage_backend: "chromadb"
+  embedding_device: "cpu"
+
+  # Retrieval
+  alpha: 0.7
+  top_k_per_sub: 20
+  top_n: 5
+  top_k_q2c: 3
+  num_fake_queries: 10
+  version_threshold: 0.80
+  version_chain_depth: 3
+  fq_confidence_threshold: 0.80
+  paragraph_top_k: 3
+  max_context_tokens: 64000
+
+embedding:
+  provider: "local"
+  model: "bge-small-en-v1.5"
+  model_path: "models/bge-small-en-v1.5"

@@ -1,0 +1,45 @@
+dataset_name: "ama_bench"
+description: "AMA-Bench small-sample config for fast iteration"
+language: "en"
+
+data:
+  root_dir: "data/AMA-Hub/dataset/test"
+  data_file: "open_end_qa_set.jsonl"
+
+evaluation:
+  mode: "independent"
+  max_samples: 5
+  episode_ids: null
+  domain_filter:
+    - "WEB"
+  qa_type_filter: null
+  memory_chunk_size: 32000
+
+query_types:
+  - name: "recall"
+    raw_type: "A"
+    abbr: "RCL"
+    metric: "ama_bench_judge"
+    description: "Direct information retrieval from trajectory"
+
+  - name: "causal_inference"
+    raw_type: "B"
+    abbr: "CI"
+    metric: "ama_bench_judge"
+    description: "Understanding cause-effect relationships"
+
+  - name: "state_updating"
+    raw_type: "C"
+    abbr: "SU"
+    metric: "ama_bench_judge"
+    description: "Tracking state changes over time"
+
+  - name: "state_abstraction"
+    raw_type: "D"
+    abbr: "SA"
+    metric: "ama_bench_judge"
+    description: "High-level understanding of agent state"
+
+output:
+  save_intermediate: true
+  save_retrieved_context: true

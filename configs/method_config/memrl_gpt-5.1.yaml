@@ -1,5 +1,6 @@
 # MemRL Agent Configuration
 # Value-driven procedural memory with Q-learning based retrieval
+# Aligned with official HLE runner pattern: trajectory strategy, short chunks
 
 method_name: "memrl"
 method_type: "agentic_memory"
@@ -9,43 +10,41 @@ model:
   provider: "openai"
   name: "gpt-5.1"
   temperature: 0.3
-  max_completion_tokens: 10000
+  max_completion_tokens: 40960
 
 agent_params:
-  retrieve_num: 2                   
-  candidate_top_k: 20               
-  similarity_threshold: 0.2          
+  retrieve_num: 8                      # Top-k memories used in prompt context
+  candidate_top_k: 20                  # Candidates for hybrid scoring before top-k selection
+  similarity_threshold: 0.1            # Minimum cosine similarity for retrieval
 
-  max_new_items_per_memorize: 8      # Max new memory items per memorize call
-  max_experience_tokens: 700         # Max tokens per experience/trajectory
-  memorize_chunk_tokens: 6000        # Chunk size for memorization (tokens)
-  memorize_chunk_overlap_tokens: 200 # Overlap between chunks
-  query_memory_item_tokens: 300      # Max tokens per memory item in query
-  query_memory_context_tokens: 1800  # Max total tokens for memory context
-  max_concurrent_api_calls: 4        # Concurrent API calls for parallel processing
+  memorize_chunk_tokens: 500           # Chunk size matching embedding model window (bge: 512 tokens)
+  memorize_chunk_overlap_tokens: 50    # Small overlap between chunks
+  max_task_desc_chars: 512             # Max chars for task_description (embedding key)
+  query_memory_context_tokens: 6000    # Token budget for memory context in query prompt
+  max_concurrent_api_calls: 4
 
-  build_strategy: "proceduralization"  # trajectory | script | proceduralization
-  retrieve_strategy: "query"           # random | query | avefact
-  update_strategy: "adjustment"        # vanilla | validation | adjustment
+  build_strategy: "trajectory"         # No LLM calls during memorize (stores raw content)
+  retrieve_strategy: "query"           # Embedding similarity based retrieval
+  update_strategy: "adjustment"        # Q-learning value adjustment on feedback
 
   # Q-learning / RL configuration
-  epsilon: 0.1                       # ε-greedy exploration probability
-  gamma: 0.0                         # Discount factor (0 for single-step)
-  learning_rate: 0.2                 # Q-learning step size (alpha)
-  initial_q: 0.5                     # Initial Q-value for new memories
-  q_init_pos: 0.5                    # Q-value init for positive samples
-  q_init_neg: 0.0                    # Q-value init for negative samples
-  success_reward: 1.0                # Reward for successful use
-  failure_reward: -1.0               # Reward for failed use
-  weight_sim: 0.5                    # Weight for similarity in hybrid scoring
-  weight_q: 0.5                      # Weight for Q-value in hybrid scoring
-  utility_mix_lambda: 0.6            # Lambda for utility mixing
+  epsilon: 0.1                         # ε-greedy exploration probability
+  gamma: 0.0                           # Discount factor (0 for single-step)
+  learning_rate: 0.2                   # Q-learning step size (alpha)
+  initial_q: 0.5                       # Initial Q-value for new memories
+  q_init_pos: 0.5                      # Q-value init for positive samples
+  q_init_neg: 0.0                      # Q-value init for negative samples
+  success_reward: 1.0                  # Reward for successful use
+  failure_reward: -1.0                 # Reward for failed use
+  weight_sim: 0.6                      # Weight for similarity in hybrid scoring
+  weight_q: 0.4                        # Weight for Q-value in hybrid scoring
 
-  max_input_tokens: 120480            # Max input tokens for memorization
-  max_context_tokens: 120480        # Max context window tokens
-  max_question_tokens: 120480          # Max question tokens
+  max_input_tokens: 64000
+  max_context_tokens: 64000
+  max_question_tokens: 64000
 
 embedding:
   provider: "local"
-  model: "bge-small-zh-v1.5"
-  model_path: "models/bge-small-zh-v1.5"
+  model: "bge-small-en-v1.5"
+  model_path: "models/bge-small-en-v1.5"
+  dim: 384

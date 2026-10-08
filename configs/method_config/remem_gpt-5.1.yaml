@@ -13,16 +13,15 @@ model:
   provider: "openai"
   name: "gpt-5.1"
   temperature: 0.3
-  max_completion_tokens: 10000
+  max_completion_tokens: 40960
 
 # ============================================================================
 # Embedding Configuration (Local Model)
 # ============================================================================
 embedding:
   provider: "local"
-  model: "BAAI/bge-small-zh-v1.5"
-  model_path: "models/bge-small-zh-v1.5"
-  dim: 512
+  model: "BAAI/bge-small-en-v1.5"
+  model_path: "models/bge-small-en-v1.5"
 
 # ============================================================================
 # ReMem Specific Parameters
@@ -43,13 +42,13 @@ agent_params:
   # --------------------------------------------------------------------------
   is_directed_graph: false
   synonymy_edge_sim_threshold: 0.8
-  synonymy_edge_topk: 10
+  synonymy_edge_topk: 2047
 
   # --------------------------------------------------------------------------
   # Retrieval Configuration
   # --------------------------------------------------------------------------
-  retrieval_top_k: 5      # Number of documents to retrieve
-  qa_top_k: 5             # Number of documents to use for QA
+  retrieval_top_k: 200    # Number of candidates for PPR graph retrieval
+  qa_top_k: 10            # Number of documents to use for QA (aligned with official)
   linking_top_k: 5         # Top-k entities for graph linking
   damping: 0.5             # PPR damping factor (0.0-1.0)
   passage_node_weight: 0.05  # Weight for passage nodes in PPR
@@ -67,12 +66,6 @@ agent_params:
   # at query time, automatically handling all accumulated sessions (including noise).
   # This ensures correct behavior regardless of the number of noise sessions.
 
-  # --------------------------------------------------------------------------
-  # API Concurrency Configuration
-  # --------------------------------------------------------------------------
-  # 降低并发度以减轻 API 超时压力
-  # - 默认 5 个并发请求（原默认值为 10）
-  # - 如果仍有超时问题，可以进一步降低到 3 或 2
   extraction_max_workers: 4
 
   # --------------------------------------------------------------------------
@@ -102,5 +95,5 @@ agent_params:
   # --------------------------------------------------------------------------
   # Token Limits
   # --------------------------------------------------------------------------
-  max_input_tokens: 20000     # Maximum input tokens per request
-  max_context_tokens: 120000  # Maximum context tokens
+  max_input_tokens: 40960     # Maximum input tokens per request
+  max_context_tokens: 64000  # Maximum context tokens

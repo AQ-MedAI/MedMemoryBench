@@ -1,4 +1,8 @@
-"""MemOS agent adapter for MedMemoryBench."""
+"""MemOS agent adapter for MedMemoryBench - tree_text mode.
+
+Uses official TreeTextMemory + SimpleStructMemReader to ensure
+full alignment with memOS's tree-based memory system.
+"""
 
 from __future__ import annotations
 
@@ -15,25 +19,35 @@ from utils.llm_client import (
     create_llm_client,
     format_messages,
     BaseLLMClient,
+    get_usage_tracker,
 )
 
 logger = logging.getLogger(__name__)
 
 
-class MemOSAgent(BaseAgent):
-    """Adapter that uses MemOS's official memory API.
+def _ensure_memos_path():
+    """Add memOS source to sys.path."""
+    memos_src = Path(__file__).resolve().parent / "memOS" / "MemOS" / "src"
+    if not memos_src.exists():
+        raise ImportError("MemOS source folder not found at methods/memOS/MemOS/src")
+    memos_src_str = str(memos_src)
+    if memos_src_str not in sys.path:
+        sys.path.insert(0, memos_src_str)
+    # Also ensure project root utils is importable from within memOS
+    project_root = Path(__file__).resolve().parent.parent
+    project_root_str = str(project_root)
+    if project_root_str not in sys.path:
+        sys.path.insert(0, project_root_str)
 
-    This implementation uses MemOS's native memory system:
-    - memorize(): uses MemOS extract() + add() for memory storage
-    - query(): uses MemOS search() for retrieval, then LLM for response
+
+class MemOSAgent(BaseAgent):
+    """Adapter using memOS tree_text mode with full official pipeline.
+
+    Ingestion: SimpleStructMemReader.get_memory() -> TreeTextMemory.add()
+    Retrieval: TreeTextMemory.search() (Searcher pipeline with BM25+reranker)
     """
 
     METHOD_TYPE = "agentic_memory"
-
-    BIGMODEL_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
-
-    DEFAULT_EXTRACTOR_TEMPERATURE = 0
-    DEFAULT_EXTRACTOR_MAX_TOKENS = 4096
 
     def __init__(
         self,
@@ -46,11 +60,20 @@ class MemOSAgent(BaseAgent):
         retrieve_num: int = 5,
         memos_backend: str = "openai",
         memos_model: Optional[str] = None,
-        text_mem_type: str = "naive_text",
+        text_mem_type: str = "tree_text",
         embedding_model: Optional[str] = None,
         embedding_model_path: Optional[str] = None,
         embedding_dim: int = 512,
         embedding_provider: str = "local",
+        # Neo4j config
+        neo4j_uri: str = "bolt://localhost:7687",
+        neo4j_user: str = "neo4j",
+        neo4j_password: str = "memos_benchmark",
+        neo4j_db_name: str = "memos_eval",
+        # Search config
+        search_mode: str = "fast",
+        search_strategy: Optional[Dict[str, Any]] = None,
+        reorganize: bool = False,
         **kwargs,
     ):
         super().__init__(model, temperature, max_tokens, **kwargs)
@@ -59,33 +82,34 @@ class MemOSAgent(BaseAgent):
         self.memos_backend = memos_backend
         self.memos_model = memos_model or model
         self.text_mem_type = text_mem_type
+        self.search_mode = search_mode
+        self.search_strategy = search_strategy or {"bm25": True, "cot": False}
+        self.reorganize = reorganize
 
-        # Token limits configuration
+        # Token limits
         self.max_input_tokens = int(kwargs.get("max_input_tokens", 8000))
         self.max_context_tokens = int(kwargs.get("max_context_tokens", 120000))
         self.max_question_tokens = int(kwargs.get("max_question_tokens", 4096))
-
-        # Calculate max_memory_tokens with floor protection
         default_memory_tokens = self.max_context_tokens - self.max_question_tokens - max_tokens - 500
         self.max_memory_tokens = max(0, int(kwargs.get("max_memory_tokens", default_memory_tokens)))
 
-        # Embedding configuration
-        # embedding_provider controls backend: "local" -> sentence_transformer, others -> universal_api
+        # Embedding config
         self.embedding_model = embedding_model
         self.embedding_model_path = embedding_model_path
         self.embedding_dim = embedding_dim
         self.embedding_provider = embedding_provider
 
-        # API configuration
-        self._memos_api_key = api_key or os.getenv("BIGMODEL_API_KEY") or os.getenv("OPENAI_API_KEY", "")
-        self._memos_api_base = (
-            base_url
-            or os.getenv("BIGMODEL_BASE_URL")
-            or os.getenv("OPENAI_BASE_URL")
-            or self.BIGMODEL_BASE_URL
-        )
+        # Neo4j config
+        self.neo4j_uri = neo4j_uri
+        self.neo4j_user = neo4j_user
+        self.neo4j_password = neo4j_password
+        self.neo4j_db_name = neo4j_db_name
 
-        # Create llm_client for response generation (ensures token tracking)
+        # API config for memOS LLM calls
+        self._memos_api_key = api_key or os.getenv("OPENAI_API_KEY", "")
+        self._memos_api_base = base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+
+        # LLM client for final QA response generation
         self._llm_client: BaseLLMClient = create_llm_client(
             provider=provider,
             model=model,
@@ -95,17 +119,15 @@ class MemOSAgent(BaseAgent):
             base_url=base_url,
         )
 
-        # Memory system instances per context
-        self._memory_systems: Dict[int, Any] = {}
-
-        # Counter for actual stored memory items (not raw chunks)
+        # Memory system (lazily initialized per context)
+        self._tree_memory = None
+        self._mem_reader = None
         self._stored_memory_count: int = 0
 
-        # Load MemOS classes
-        self._MemoryFactory, self._MemoryConfigFactory = self._load_memos_classes()
+        # Load memOS
+        _ensure_memos_path()
 
     def _truncate_to_tokens(self, text: str, max_tokens: int) -> str:
-        """Truncate text to max_tokens."""
         if not text or max_tokens <= 0:
             return ""
         tokens = self._tokenizer.encode(text)
@@ -113,194 +135,163 @@ class MemOSAgent(BaseAgent):
             return text
         return self._tokenizer.decode(tokens[:max_tokens])
 
-    def _load_memos_classes(self) -> tuple:
-        """Load vendored memOS package from methods/memOS/MemOS/src.
-
-        Returns:
-            Tuple of (MemoryFactory, MemoryConfigFactory) classes.
-        """
-        memos_src = Path(__file__).resolve().parent / "memOS" / "MemOS" / "src"
-        if not memos_src.exists():
-            raise ImportError("MemOS source folder not found at methods/memOS/MemOS/src")
-
-        memos_src_str = str(memos_src)
-        if memos_src_str not in sys.path:
-            sys.path.insert(0, memos_src_str)
-
-        memory_factory_module = importlib.import_module("memos.memories.factory")
-        memory_config_module = importlib.import_module("memos.configs.memory")
-        return (
-            getattr(memory_factory_module, "MemoryFactory"),
-            getattr(memory_config_module, "MemoryConfigFactory"),
-        )
-
-    def _get_context_id(self) -> int:
-        """Get current context ID, defaulting to 0 if not set."""
-        return self._context_id if self._context_id is not None else 0
-
-    def _build_memory_config(self, context_id: int) -> Any:
-        """Build memory configuration based on text_mem_type.
-
-        Args:
-            context_id: Context identifier for collection naming.
-
-        Returns:
-            MemoryConfigFactory instance with configured backend.
-        """
-        base_config: Dict[str, Any] = {
-            "extractor_llm": {
-                "backend": self.memos_backend,
+    def _get_embedder_config(self) -> Dict[str, Any]:
+        if self.embedding_provider == "local" and self.embedding_model_path:
+            return {
+                "backend": "sentence_transformer",
                 "config": {
-                    "model_name_or_path": self.memos_model,
-                    "temperature": self.DEFAULT_EXTRACTOR_TEMPERATURE,
-                    "max_tokens": self.DEFAULT_EXTRACTOR_MAX_TOKENS,
-                    "api_key": self._memos_api_key,
-                    "api_base": self._memos_api_base,
+                    "model_name_or_path": self.embedding_model_path,
+                    "embedding_dims": self.embedding_dim,
+                    "trust_remote_code": True,
                 },
             }
+        else:
+            return {
+                "backend": "universal_api",
+                "config": {
+                    "provider": "openai",
+                    "model_name_or_path": self.embedding_model or "text-embedding-3-small",
+                    "api_key": self._memos_api_key,
+                    "base_url": self._memos_api_base,
+                    "embedding_dims": self.embedding_dim,
+                },
+            }
+
+    def _get_llm_config(self) -> Dict[str, Any]:
+        return {
+            "backend": self.memos_backend,
+            "config": {
+                "model_name_or_path": self.memos_model,
+                "temperature": 0,
+                "max_tokens": 4096,
+                "api_key": self._memos_api_key,
+                "api_base": self._memos_api_base,
+            },
         }
 
-        # Add embedder and vector_db config for types that need it
-        if self.text_mem_type in ["general_text", "tree_text", "simple_tree_text", "pref_text"]:
-            # Embedder configuration
-            if self.embedding_provider == "local" and self.embedding_model_path:
-                base_config["embedder"] = {
-                    "backend": "sentence_transformer",
-                    "config": {
-                        "model_name_or_path": self.embedding_model_path,
-                        "embedding_dims": self.embedding_dim,
-                        "trust_remote_code": True,
-                    },
-                }
-            else:
-                base_config["embedder"] = {
-                    "backend": "universal_api",
-                    "config": {
-                        "provider": "openai",
-                        "model_name_or_path": self.embedding_model or "text-embedding-3-small",
-                        "api_key": self._memos_api_key,
-                        "base_url": self._memos_api_base,
-                        "embedding_dims": self.embedding_dim,
-                    },
-                }
+    def _init_tree_memory(self):
+        """Initialize TreeTextMemory with Neo4j backend (shared-db mode)."""
+        if self._tree_memory is not None:
+            return
 
-            # Vector database configuration (required for general_text)
-            # Use Qdrant with in-memory storage for each context
-            base_config["vector_db"] = {
-                "backend": "qdrant",
+        from memos.configs.memory import MemoryConfigFactory
+        from memos.memories.factory import MemoryFactory
+
+        context_id = self._get_context_id()
+        user_name = f"ctx_{context_id}"
+
+        tree_config = {
+            "extractor_llm": self._get_llm_config(),
+            "dispatcher_llm": self._get_llm_config(),
+            "embedder": self._get_embedder_config(),
+            "graph_db": {
+                "backend": "neo4j",
                 "config": {
-                    "collection_name": f"memos_ctx_{context_id}",
-                    "vector_dimension": self.embedding_dim,
-                    "distance_metric": "cosine",
+                    "uri": self.neo4j_uri,
+                    "user": self.neo4j_user,
+                    "password": self.neo4j_password,
+                    "db_name": "neo4j",
+                    "auto_create": False,
+                    "use_multi_db": False,
+                    "user_name": user_name,
+                    "embedding_dimension": self.embedding_dim,
                 },
-            }
+            },
+            "search_strategy": self.search_strategy,
+            "reorganize": self.reorganize,
+            "mode": "sync",
+        }
 
-        return self._MemoryConfigFactory(
-            backend=self.text_mem_type,
-            config=base_config,
+        config_factory = MemoryConfigFactory(
+            backend="tree_text",
+            config=tree_config,
         )
+        self._tree_memory = MemoryFactory.from_config(config_factory)
+        logger.info(f"TreeTextMemory initialized for context {context_id}, user_name={user_name}")
 
-    def _create_memory_system(self, context_id: int) -> Any:
-        """Create a MemOS memory system for the given context.
+    def _init_mem_reader(self):
+        """Initialize SimpleStructMemReader for extraction."""
+        if self._mem_reader is not None:
+            return
 
-        Args:
-            context_id: Context identifier.
+        from memos.configs.mem_reader import MemReaderConfigFactory
+        from memos.mem_reader.factory import MemReaderFactory
 
-        Returns:
-            MemOS memory system instance.
-        """
-        config = self._build_memory_config(context_id)
-        memory = self._MemoryFactory.from_config(config)
-        self._memory_systems[context_id] = memory
-        return memory
+        reader_config = MemReaderConfigFactory(
+            backend="simple_struct",
+            config={
+                "llm": self._get_llm_config(),
+                "general_llm": self._get_llm_config(),
+                "embedder": self._get_embedder_config(),
+                "chunker": {
+                    "backend": "sentence",
+                    "config": {
+                        "chunk_size": 512,
+                        "chunk_overlap": 128,
+                        "save_rawfile": False,
+                    },
+                },
+                "chat_window_max_tokens": 2048,
+                "remove_prompt_example": False,
+            },
+        )
+        self._mem_reader = MemReaderFactory.from_config(reader_config)
+        logger.info("SimpleStructMemReader initialized")
 
-    def _get_memory_system(self, context_id: int) -> Any:
-        """Get or create memory system for the given context.
-
-        Args:
-            context_id: Context identifier.
-
-        Returns:
-            MemOS memory system instance.
-        """
-        system = self._memory_systems.get(context_id)
-        if system is None:
-            system = self._create_memory_system(context_id)
-        return system
+    def _get_context_id(self):
+        return self._context_id if self._context_id is not None else 0
 
     def memorize(self, text: str, **kwargs) -> MemoryBuildResult:
-        """Store memory using MemOS's official extract() and add() methods.
+        """Store memory using official memOS pipeline.
 
-        This uses MemOS's native LLM-based memory extraction pipeline.
-
-        Args:
-            text: Input text to memorize.
-            **kwargs: Additional arguments (unused).
-
-        Returns:
-            MemoryBuildResult with extraction and storage details.
+        Flow: SimpleStructMemReader.get_memory() -> TreeTextMemory.add()
         """
+        self._init_tree_memory()
+        self._init_mem_reader()
+
         context_id = self._get_context_id()
-        memory_system = self._get_memory_system(context_id)
+        user_name = f"ctx_{context_id}"
 
-        # Truncate input text
         bounded_text = self._truncate_to_tokens(text, self.max_input_tokens)
-
-        # Convert text to message format for MemOS extract()
         messages = [{"role": "user", "content": bounded_text}]
 
         start_time = time.time()
-        all_extraction_results: List[Dict[str, Any]] = []
-        all_stored_memories: List[Dict[str, Any]] = []
-        extraction_time = 0.0
-        add_time = 0.0
 
         try:
-            # Use MemOS's official extract() method
-            # This calls MemOS's LLM-based extractor internally
-            extracted_items = memory_system.extract(messages)
+            # Phase tracking: memOS internal LLM calls will be recorded
+            get_usage_tracker().set_phase("memorize")
+
+            # Step 1: Extract memories using official mem_reader
+            extracted_results = self._mem_reader.get_memory(
+                scene_data=[messages],
+                type="chat",
+                info={"user_id": user_name, "session_id": ""},
+                mode="fine",
+                user_name=user_name,
+            )
+
             extraction_time = time.time() - start_time
 
-            # Record extraction results
-            for item in extracted_items:
-                memory_text = getattr(item, "memory", str(item))
-                metadata = getattr(item, "metadata", {})
-                if hasattr(metadata, "model_dump"):
-                    metadata = metadata.model_dump()
+            # Flatten results (list[list[TextualMemoryItem]] -> list[TextualMemoryItem])
+            all_memories = []
+            for scene_memories in extracted_results:
+                all_memories.extend(scene_memories)
 
-                all_extraction_results.append({
-                    "memory": memory_text,
-                    "metadata": metadata,
-                })
-
-            # Use MemOS's official add() method to store extracted memories
-            if extracted_items:
-                add_start = time.time()
-                memory_system.add(extracted_items)
-                add_time = time.time() - add_start
-
-                for item in extracted_items:
-                    memory_text = getattr(item, "memory", str(item))
-                    metadata = getattr(item, "metadata", {})
-                    if hasattr(metadata, "model_dump"):
-                        metadata = metadata.model_dump()
-
-                    all_stored_memories.append({
-                        "memory": memory_text,
-                        "metadata": metadata,
-                    })
-
-                # Update stored memory count
-                self._stored_memory_count += len(extracted_items)
+            # Step 2: Add extracted memories to TreeTextMemory (Neo4j)
+            add_start = time.time()
+            if all_memories:
+                added_ids = self._tree_memory.add(all_memories, user_name=user_name)
+                self._stored_memory_count += len(added_ids) if added_ids else len(all_memories)
+            add_time = time.time() - add_start
 
             total_time = time.time() - start_time
 
         except Exception as e:
-            logger.error(f"MemOS extract/add failed: {e}", exc_info=True)
+            logger.error(f"MemOS tree_text memorize failed: {e}", exc_info=True)
             return MemoryBuildResult(
                 success=False,
                 method="memos",
-                action="extract_and_add",
+                action="tree_text_extract_and_add",
                 input_content=text,
                 stored_content="",
                 extraction_result=f"[Error: {e}]",
@@ -310,41 +301,48 @@ class MemOSAgent(BaseAgent):
                 extra={"context_id": context_id, "error": str(e)},
             )
 
-        # Track raw input chunks for compatibility
         self._memory_chunks.append(text)
         self._is_initialized = True
 
-        # Create detailed memory entries for display (limited to first 10)
-        memory_entries = [
-            {
+        # Build summary
+        memory_entries = []
+        all_stored = []
+        for item in all_memories[:10]:
+            mem_text = getattr(item, "memory", str(item))
+            metadata = getattr(item, "metadata", {})
+            if hasattr(metadata, "model_dump"):
+                metadata_dict = metadata.model_dump(exclude={"embedding"})
+            else:
+                metadata_dict = {}
+            memory_entries.append({
                 "event": "ADD",
-                "memory": mem.get("memory", "")[:200],
-                "metadata": mem.get("metadata", {}),
-            }
-            for mem in all_stored_memories[:10]
-        ]
+                "memory": mem_text[:200],
+                "metadata": metadata_dict,
+            })
+            all_stored.append({
+                "memory": mem_text,
+                "memory_type": getattr(metadata, "memory_type", "unknown"),
+            })
 
-        # Build extraction result summary
-        extraction_summary = f"Extracted {len(extracted_items)} memories using MemOS extract()\n"
-        for i, item in enumerate(all_extraction_results[:5]):
-            extraction_summary += f"  [{i+1}] {item['memory'][:100]}...\n"
+        extraction_summary = f"Extracted {len(all_memories)} memories via SimpleStructMemReader (fine mode)\n"
+        for i, item in enumerate(all_memories[:5]):
+            extraction_summary += f"  [{i+1}] [{getattr(item.metadata, 'memory_type', '?')}] {item.memory[:100]}...\n"
 
         return MemoryBuildResult(
             success=True,
             method="memos",
-            action="extract_and_add",
+            action="tree_text_extract_and_add",
             input_content=text,
             stored_content=bounded_text,
             extraction_result=extraction_summary,
-            all_passages=all_stored_memories,
+            all_passages=all_stored,
             memory_entries=memory_entries,
             chunk_count=self._stored_memory_count,
             time_cost=total_time,
             extra={
                 "context_id": context_id,
-                "retrieve_num": self.retrieve_num,
-                "extracted_count": len(extracted_items),
                 "text_mem_type": self.text_mem_type,
+                "extracted_count": len(all_memories),
                 "extraction_time": extraction_time,
                 "add_time": add_time,
             },
@@ -356,41 +354,41 @@ class MemOSAgent(BaseAgent):
         system_message: Optional[str] = None,
         **kwargs,
     ) -> AgentResponse:
-        """Query using MemOS's official search() method.
+        """Query using official TreeTextMemory.search() pipeline.
 
-        Uses MemOS's native vector search for retrieval, then generates response.
-
-        Args:
-            question: User question to answer.
-            system_message: Optional system prompt.
-            **kwargs: Additional arguments (unused).
-
-        Returns:
-            AgentResponse with answer and retrieval details.
+        Uses full Searcher pipeline: TaskGoalParser -> GraphMemoryRetriever -> Reranker
         """
-        context_id = self._get_context_id()
-        memory_system = self._get_memory_system(context_id)
+        self._init_tree_memory()
 
-        # Truncate question
+        context_id = self._get_context_id()
+        user_name = f"ctx_{context_id}"
+
         bounded_question = self._truncate_to_tokens(question, self.max_question_tokens)
 
         start_time = time.time()
 
-        # Use MemOS's official search() method
-        # Request exactly retrieve_num results (no over-fetching)
-        memory_items = memory_system.search(bounded_question, top_k=self.retrieve_num)
+        # Phase tracking for dispatcher_llm calls during search
+        get_usage_tracker().set_phase("query")
+
+        # Use official TreeTextMemory.search()
+        memory_items = self._tree_memory.search(
+            query=bounded_question,
+            top_k=self.retrieve_num,
+            mode=self.search_mode,
+            manual_close_internet=True,
+            user_name=user_name,
+            info={"user_id": user_name, "session_id": "eval"},
+        )
 
         search_time = time.time() - start_time
 
-        # Calculate token budget for memory context
+        # Build memory context with token budget
         system_tokens = self._llm_client.count_tokens(system_message) if system_message else 0
         reserved_tokens = self.max_tokens + 500
         available_tokens = max(self.max_context_tokens - reserved_tokens - system_tokens, 0)
         question_tokens = self._llm_client.count_tokens(bounded_question)
-        memory_budget = max(available_tokens - question_tokens, 0)
-        memory_budget = min(memory_budget, self.max_memory_tokens)
+        memory_budget = min(max(available_tokens - question_tokens, 0), self.max_memory_tokens)
 
-        # Build memory context with truncation
         retrieved_memories: List[Dict[str, Any]] = []
         memory_blocks: List[str] = []
         used_tokens = 0
@@ -402,28 +400,27 @@ class MemOSAgent(BaseAgent):
 
             mem_tokens = self._llm_client.count_tokens(mem_text)
             if used_tokens + mem_tokens > memory_budget:
-                # Truncate this memory to fit remaining budget
                 remaining = memory_budget - used_tokens
                 if remaining > 100:
                     truncated = self._truncate_to_tokens(mem_text, remaining)
                     memory_blocks.append(truncated)
                     retrieved_memories.append({
                         "memory": truncated[:2000],
-                        "type": "memos_search",
+                        "type": "tree_text_search",
                         "truncated": True,
                     })
                 break
 
-            metadata = getattr(item, "metadata", None)
             memory_blocks.append(mem_text)
             used_tokens += mem_tokens
+            metadata = getattr(item, "metadata", None)
             retrieved_memories.append({
                 "memory": mem_text[:2000],
-                "type": "memos_search",
-                "metadata": metadata.model_dump() if hasattr(metadata, "model_dump") else {},
+                "type": "tree_text_search",
+                "memory_type": getattr(metadata, "memory_type", "unknown") if metadata else "unknown",
             })
 
-        # Build final prompt with retrieved memories
+        # Build final prompt
         full_question = bounded_question
         if memory_blocks:
             memory_context = "\n\n".join(
@@ -431,7 +428,7 @@ class MemOSAgent(BaseAgent):
             )
             full_question = f"[Retrieved MemOS Memories]\n{memory_context}\n\n[Question]\n{bounded_question}"
 
-        # Use llm_client for final response generation
+        # Generate response (tracked by llm_client)
         messages = format_messages(full_question, system_message)
         response = self._llm_client.chat(messages)
 
@@ -445,6 +442,7 @@ class MemOSAgent(BaseAgent):
             extra={
                 "method": "memos",
                 "text_mem_type": self.text_mem_type,
+                "search_mode": self.search_mode,
                 "search_time": search_time,
                 "tokens_used": {
                     "input": response.input_tokens,
@@ -454,20 +452,31 @@ class MemOSAgent(BaseAgent):
         )
 
     def reset(self) -> None:
-        """Reset agent state and clear all memory systems."""
+        """Reset agent state. Clears Neo4j data for current context."""
         super().reset()
-        self._memory_systems = {}
+
+        if self._tree_memory is not None:
+            try:
+                context_id = self._get_context_id()
+                user_name = f"ctx_{context_id}"
+                self._tree_memory.delete_all(user_name=user_name)
+            except Exception as e:
+                logger.warning(f"Failed to clear Neo4j data: {e}")
+
+        self._tree_memory = None
+        self._mem_reader = None
         self._stored_memory_count = 0
 
     def set_context_id(self, context_id: int) -> None:
-        """Set context ID for distinguishing personas.
-
-        Args:
-            context_id: Context identifier.
-        """
+        """Set context ID. Re-initializes memory system for new context."""
+        old_id = self._context_id
         super().set_context_id(context_id)
+
+        # Re-init memory system if context changed
+        if old_id != context_id:
+            self._tree_memory = None
+            self._mem_reader = None
 
     @property
     def memory_size(self) -> int:
-        """Get count of actual stored memory items."""
         return self._stored_memory_count

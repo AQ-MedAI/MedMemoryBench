@@ -105,6 +105,7 @@ class ChatCompletionRequest(BaseModel):
     logprobs: Optional[bool] = False
     top_logprobs: Optional[int] = None
     max_tokens: Optional[int] = None
+    max_completion_tokens: Optional[int] = None  # For models requiring max_completion_tokens
     n: Optional[int] = 1
     presence_penalty: Optional[float] = 0
     response_format: Optional[ResponseFormat] = None

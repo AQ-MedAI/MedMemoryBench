@@ -9,7 +9,7 @@ model:
   provider: "openai"
   name: "gpt-5.1"
   temperature: 0.3
-  max_completion_tokens: 10000
+  max_completion_tokens: 40960
 
 agent_params:
   # Memory retrieval configuration
@@ -18,19 +18,11 @@ agent_params:
   # Chunking configuration
   memorize_chunk_tokens: 10240           # Chunk size for memorization (tokens)
   memorize_chunk_overlap_tokens: 200     # Overlap between chunks
-  query_memory_item_tokens: 4096         # Max tokens per memory item in query
-  query_memory_context_tokens: 10240     # Max total tokens for memory context
 
   # Context limits
-  max_input_tokens: 20000                # Max input tokens for memorization
-  max_context_tokens: 120000             # Max context window tokens
-  max_question_tokens: 4096              # Max question tokens
-
-  # Query mode:
-  # - true: Use MIRIX native send_message (for memory management tasks)
-  # - false: Use manual retrieval + external LLM (recommended for Q&A evaluation)
-  # NOTE: For MedMemoryBench Q&A evaluation, use false to ensure proper responses
-  use_native_query: false
+  max_input_tokens: 64000                # Max input tokens for memorization
+  max_context_tokens: 64000             # Max context window tokens
+  max_question_tokens: 10240              # Max question tokens
 
   # Local embedding device (only used when embedding.provider = "local")
   # Options: "cuda", "cpu", "mps", or null for auto-detection
@@ -38,6 +30,6 @@ agent_params:
 
 embedding:
   provider: "local"
-  model: "bge-small-zh-v1.5"
-  model_path: "models/bge-small-zh-v1.5"
-  dim: 512
+  model: "bge-small-en-v1.5"
+  model_path: "models/bge-small-en-v1.5"
+  dim: 384

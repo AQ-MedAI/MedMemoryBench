@@ -8,13 +8,12 @@ model:
   provider: "openai"
   name: "gpt-5.1"
   temperature: 0.3
-  max_completion_tokens: 10000
+  max_completion_tokens: 40960
 
 embedding:
   provider: "local"
-  model: "bge-small-zh-v1.5"
-  model_path: "models/bge-small-zh-v1.5"
-  dim: 512
+  model: "bge-small-en-v1.5"
+  model_path: "models/bge-small-en-v1.5"
 
 agent_params:
   # Memory retrieval settings
@@ -22,7 +21,7 @@ agent_params:
   embedding_chunk_size: 300
 
   # Context window settings
-  context_window: 120480
+  context_window: 40960
 
   # Agent persona settings
   memory_persona: "I am an assistant helping with medical QA while preserving long-term memory."
@@ -33,6 +32,6 @@ agent_params:
   memorize_chunk_overlap_tokens: 200
 
   # Token limits for query truncation
-  max_input_tokens: 120480
-  max_question_tokens: 120480
-  max_context_tokens: 120480
+  max_input_tokens: 64000
+  max_question_tokens: 64000
+  max_context_tokens: 64000

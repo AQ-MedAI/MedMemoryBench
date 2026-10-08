@@ -46,4 +46,43 @@ MEMORIZE_TEMPLATES: Dict[str, str] = {
 
 {context}""",
 
+    # LongMemEval
+    "longmemeval_long_context_memorize": """The following are conversation sessions between a user and an assistant. Please read and memorize all details carefully, including dates, facts, preferences, and any updates to previously mentioned information.
+
+{context}""",
+
+    "longmemeval_rag_memorize": """The following are conversation sessions between a user and an assistant. Please read and memorize all details carefully, including dates, facts, preferences, and any updates to previously mentioned information.
+
+{context}""",
+
+    "longmemeval_agentic_memorize": """The following are conversation sessions between a user and an assistant. Please read and memorize all details carefully, including dates, facts, preferences, and any updates to previously mentioned information.
+
+{context}""",
+
+    # AMA-Bench
+    "ama_bench_long_context_memorize": """The following is an agent's task execution trajectory. Please read it carefully and memorize all actions taken, observations received, state changes, and the overall progression of the task.
+
+{context}""",
+
+    "ama_bench_rag_memorize": """The following is an agent's task execution trajectory. Please read it carefully and memorize all actions taken, observations received, state changes, and the overall progression of the task.
+
+{context}""",
+
+    "ama_bench_agentic_memorize": """The following is an agent's task execution trajectory. Please read it carefully and memorize all actions taken, observations received, state changes, and the overall progression of the task.
+
+{context}""",
+
+    # LongMemEval-V2
+    "longmemeval_v2_long_context_memorize": """The following are web-agent task trajectory records. Each trajectory contains a task goal, outcome, and a sequence of states with URLs, actions, thoughts, and page content observed during task execution. Please read and memorize all details carefully, including specific data values, product names, order numbers, URLs, user actions, and task outcomes.
+
+{context}""",
+
+    "longmemeval_v2_rag_memorize": """The following are web-agent task trajectory records. Each trajectory contains a task goal, outcome, and a sequence of states with URLs, actions, thoughts, and page content observed during task execution. Please read and memorize all details carefully, including specific data values, product names, order numbers, URLs, user actions, and task outcomes.
+
+{context}""",
+
+    "longmemeval_v2_agentic_memorize": """The following are web-agent task trajectory records. Each trajectory contains a task goal, outcome, and a sequence of states with URLs, actions, thoughts, and page content observed during task execution. Please read and memorize all details carefully, including specific data values, product names, order numbers, URLs, user actions, and task outcomes.
+
+{context}""",
+
 }

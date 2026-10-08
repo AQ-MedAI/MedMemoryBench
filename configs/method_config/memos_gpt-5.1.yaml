@@ -1,36 +1,42 @@
-# MemOS Agent Configuration
+# MemOS Agent Configuration - tree_text mode
 
 method_name: "memos"
 method_type: "agentic_memory"
-description: "MemOS (vendored) adapter for MedMemoryBench with configurable memory backend"
+description: "MemOS tree_text adapter: Neo4j graph + BM25 + reranker + MemoryManager"
 
 model:
   provider: "openai"
   name: "gpt-5.1"
   temperature: 0.3
-  max_completion_tokens: 10000
+  max_completion_tokens: 40960
 
 embedding:
   provider: "local"
-  model: "bge-small-zh-v1.5"
-  model_path: "models/bge-small-zh-v1.5"
+  model: "bge-small-en-v1.5"
+  model_path: "models/bge-small-en-v1.5"
+  dim: 384
 
 agent_params:
-  retrieve_num: 5
+  retrieve_num: 10
   memos_backend: "openai"
   memos_model: "gpt-5.1"
-  # Use general_text instead of naive_text to preserve Chinese language
-  # naive_text translates Chinese to English, causing retrieval failures
-  text_mem_type: "general_text"
+  text_mem_type: "tree_text"
 
-  # Embedding configuration
-  # embedding_provider controls the backend: "local" uses sentence_transformer, others use universal_api
-  embedding_model: "bge-small-zh-v1.5"
-  embedding_model_path: "models/bge-small-zh-v1.5"
-  embedding_dim: 512
-  embedding_provider: "local"
+  # Search configuration
+  search_mode: "fast"
+  search_strategy:
+    bm25: true
+    cot: false
+  reorganize: false
 
+  # Neo4j configuration
+  neo4j_uri: "bolt://localhost:7687"
+  neo4j_user: "neo4j"
+  neo4j_password: "memos_benchmark"
+  neo4j_db_name: "memos_eval"
+
+  # Token limits
   max_input_tokens: 40960
   max_question_tokens: 10000
-  max_context_tokens: 128000
-  max_memory_tokens: 80000
+  max_context_tokens: 64000
+  max_memory_tokens: 40960

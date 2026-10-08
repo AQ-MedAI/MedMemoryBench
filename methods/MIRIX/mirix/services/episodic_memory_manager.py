@@ -456,7 +456,7 @@ class EpisodicMemoryManager:
                     EpisodicEvent.user_id == user_id,
                     EpisodicEvent.is_deleted == False,
                 )
-                .values(is_deleted=True, updated_at=datetime.now(dt.UTC))
+                .values(is_deleted=True, updated_at=datetime.now(dt.timezone.utc))
             )
 
             await session.commit()
@@ -995,6 +995,9 @@ class EpisodicMemoryManager:
                     episodic_memory = top_events
                     # Return the list after converting to Pydantic.
                     return [event.to_pydantic() for event in episodic_memory]
+
+                else:
+                    raise ValueError(f"Invalid search method: {search_method}")
 
                 if limit:
                     main_query = main_query.limit(limit)

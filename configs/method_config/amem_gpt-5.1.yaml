@@ -2,20 +2,19 @@
 
 method_name: "amem"
 method_type: "agentic_memory"
-description: "A-Mem (Agentic Memory) adapter for MedMemoryBench"
+description: "A-Mem (Agentic Memory) adapter for MedMemoryBench — official logic"
 
 model:
   provider: "openai"
   name: "gpt-5.1"
   temperature: 0.3
-  max_completion_tokens: 10000
+  max_completion_tokens: 40960
 
 agent_params:
   retrieve_num: 5
-  amem_backend: "openai"          # openai / ollama / sglang / vllm
-  amem_model: "gpt-5.1"        # model used by A-Mem metadata/evolution calls
-  amem_embedding_model: "models/bge-small-zh-v1.5"
+  amem_backend: "openai"
+  amem_model: "gpt-5.1"
+  amem_embedding_model: "models/bge-small-en-v1.5"
   amem_evo_threshold: 100
-  amem_max_tokens: 10000          # max tokens for A-Mem internal LLM calls
-  amem_max_context_tokens: 200000 
-  amem_chunk_size_tokens: 5120   # chunk size for splitting large memory content
+  amem_max_tokens: 40960
+  max_context_tokens: 64000

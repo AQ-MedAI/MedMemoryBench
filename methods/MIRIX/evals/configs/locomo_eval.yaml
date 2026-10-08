@@ -1,0 +1,42 @@
+# MIRIX Configuration for LoCoMo Evaluation
+# LLM: gpt-5.1 via matrixllm proxy
+# Embedding: bge-small-en-v1.5 (local, served via embedding_server.py)
+
+llm_config:
+  model: "gpt-5.1"
+  model_endpoint_type: "openai"
+  api_key: your-api-key
+  model_endpoint: "https://matrixllm.alipay.com/v1"
+  context_window: 128000
+
+topic_extraction_llm_config:
+  model: "gpt-5.1"
+  model_endpoint_type: "openai"
+  api_key: your-api-key
+  model_endpoint: "https://matrixllm.alipay.com/v1"
+  context_window: 128000
+
+embedding_config:
+  embedding_model: "bge-small-en-v1.5"
+  embedding_endpoint: "http://127.0.0.1:6100/v1"
+  api_key: "no-key-needed"
+  embedding_endpoint_type: "hugging-face"
+  embedding_dim: 384
+
+build_embeddings_for_memory: true
+
+meta_agent_config:
+  system_prompts_folder: prompts/0201a/
+  agents:
+    - core_memory_agent
+    - resource_memory_agent
+    - semantic_memory_agent
+    - episodic_memory_agent
+    - procedural_memory_agent
+    - knowledge_vault_memory_agent
+  memory:
+    core:
+      - label: "human"
+        value: ""
+      - label: "persona"
+        value: "I am a helpful assistant."

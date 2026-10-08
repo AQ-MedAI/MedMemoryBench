@@ -1,0 +1,54 @@
+dataset_name: "longmemeval"
+description: "LongMemEval - Long-term Memory Evaluation Benchmark"
+language: "en"
+
+data:
+  root_dir: "data/LongMemEval/data/longmemeval-cleaned"
+  data_file: "longmemeval_s_cleaned.json"
+
+evaluation:
+  mode: "independent"
+  # Number of sessions per memorize call
+  sessions_per_batch: 10
+  # Optional: limit number of question instances for testing
+  max_instances: 500
+  # Optional: limit haystack sessions per instance for quick testing
+  # (answer sessions are always kept; remaining slots filled with distractors)
+  max_sessions: null
+  # Optional: specific question_ids to evaluate
+  question_ids: null
+
+query_types:
+  - name: "single-session-user"
+    abbr: "SSU"
+    metric: "llm_judge"
+    description: "Single-session user information recall"
+
+  - name: "single-session-assistant"
+    abbr: "SSA"
+    metric: "llm_judge"
+    description: "Single-session assistant information recall"
+
+  - name: "single-session-preference"
+    abbr: "SSP"
+    metric: "llm_judge"
+    description: "Single-session user preference recall"
+
+  - name: "multi-session"
+    abbr: "MS"
+    metric: "llm_judge"
+    description: "Multi-session information integration"
+
+  - name: "temporal-reasoning"
+    abbr: "TR"
+    metric: "llm_judge"
+    description: "Temporal reasoning over sessions"
+
+  - name: "knowledge-update"
+    abbr: "KU"
+    metric: "llm_judge"
+    description: "Knowledge update tracking"
+
+output:
+  save_intermediate: true
+  save_retrieved_context: true

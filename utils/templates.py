@@ -12,6 +12,9 @@ SYSTEM_MESSAGES: Dict[str, str] = {
     "medmemorybench": "你是患者的个性化医疗助手，能够准确记忆患者的完整病史。请基于记忆中的患者信息进行推理回复，语气亲切专业，回答直接，避免冗长解释和套话。",
     "medmemorybench_en": "You are the patient's personalized medical assistant, capable of accurately memorizing the patient's complete medical history. Please reason and respond based on patient information in memory, maintaining a warm yet professional tone, answering directly, and avoiding lengthy explanations and boilerplate.",
     "locomo": "You are a helpful assistant that can read the context and memorize it for future retrieval.",
+    "longmemeval": "You are a helpful assistant with long-term memory. You can remember past conversations and use that information to answer questions accurately.",
+    "ama_bench": "You are an expert agent trajectory analyst. You can memorize and recall detailed information from agent task execution trajectories, including actions taken, observations received, state changes, and causal relationships between events.",
+    "longmemeval_v2": "You are an experienced colleague who has observed many web-agent task trajectories. You can recall details from these trajectories — including the agent's goals, actions, page states, and outcomes — to answer questions accurately. If you do not know the answer, output exactly \\boxed{UNKNOWN}. Do not guess.",
 }
 
 METHOD_TYPE_MAPPING: Dict[str, str] = {
@@ -45,6 +48,21 @@ MEMORY_SOURCE_DESCRIPTIONS: Dict[str, Dict[str, str]] = {
         "long_context": "the memorized conversation records",
         "rag": "the retrieved relevant records",
         "agentic": "the archival memory",
+    },
+    "longmemeval": {
+        "long_context": "the memorized conversation history",
+        "rag": "the retrieved relevant conversations",
+        "agentic": "your memory of past conversations",
+    },
+    "ama_bench": {
+        "long_context": "the memorized records",
+        "rag": "the retrieved relevant trajectory segments",
+        "agentic": "the relevant information from memory",
+    },
+    "longmemeval_v2": {
+        "long_context": "the memorized web-agent trajectory records",
+        "rag": "the retrieved relevant trajectory records",
+        "agentic": "your memory of past web-agent trajectories",
     },
 }
 
@@ -84,7 +102,7 @@ class PromptManager:
 
         return template.format(**params)
 
-    def format_query(self, question: str, query_type: str) -> str:
+    def format_query(self, question: str, query_type: str, question_date: str = "", **kwargs) -> str:
         key = f"{self._template_prefix}_{query_type}_qa"
         template = QA_TEMPLATES.get(key)
 
@@ -107,7 +125,13 @@ class PromptManager:
             )
         )
 
-        return template.format(question=question, memory_source=memory_source)
+        params = {"question": question, "memory_source": memory_source}
+        if question_date and "{question_date}" in template:
+            params["question_date"] = question_date
+        elif "{question_date}" in template:
+            params["question_date"] = ""
+
+        return template.format(**params)
 
     def format_judge(
         self,

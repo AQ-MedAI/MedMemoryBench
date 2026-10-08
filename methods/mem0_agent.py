@@ -28,6 +28,7 @@ class Mem0Agent(BaseAgent):
         embedding_model: str = "text-embedding-3-small",
         embedding_provider: str = "openai",
         embedding_model_path: Optional[str] = None,
+        embedding_dim: Optional[int] = None,
         retrieve_num: int = 5,
         **kwargs
     ):
@@ -36,6 +37,7 @@ class Mem0Agent(BaseAgent):
         self.embedding_model = embedding_model
         self.embedding_provider = embedding_provider
         self.embedding_model_path = embedding_model_path
+        self.embedding_dim = embedding_dim
         self.retrieve_num = retrieve_num
         # Support both 'chunk_size_tokens' (config file) and 'max_input_tokens' (legacy)
         self.max_input_tokens = int(
@@ -79,37 +81,20 @@ class Mem0Agent(BaseAgent):
         self._init_mem0()
 
     def _get_embedding_dims(self, model_name_or_path: str) -> int:
-        """Get embedding dimensions for a model without loading it repeatedly.
+        """Get embedding dimensions for a model.
 
-        Uses a cache and known model dimensions to avoid expensive model loading.
+        Priority: config embedding_dim > cache > SentenceTransformer dynamic detection > known_dims fallback.
         """
-        # Check cache first
+        # 1. Config explicitly specified dim takes highest priority
+        if self.embedding_dim:
+            self._embedding_dims_cache[model_name_or_path] = self.embedding_dim
+            return self.embedding_dim
+
+        # 2. Check cache
         if model_name_or_path in self._embedding_dims_cache:
             return self._embedding_dims_cache[model_name_or_path]
 
-        # Known model dimensions (common models)
-        known_dims = {
-            # BGE models
-            "bge-small": 512,
-            "bge-base": 768,
-            "bge-large": 1024,
-            "bge-m3": 1024,
-            # Other common models
-            "all-MiniLM-L6": 384,
-            "all-mpnet-base": 768,
-            "paraphrase-multilingual": 768,
-            "multi-qa-MiniLM": 384,
-        }
-
-        # Try to match known models
-        model_lower = model_name_or_path.lower()
-        for pattern, dims in known_dims.items():
-            if pattern.lower() in model_lower:
-                self._embedding_dims_cache[model_name_or_path] = dims
-                return dims
-
-        # If not a known model, we need to load it once
-        # But this should only happen once per unique model
+        # 3. Dynamic detection via SentenceTransformer (most accurate)
         try:
             from sentence_transformers import SentenceTransformer
             temp_model = SentenceTransformer(model_name_or_path)
@@ -118,9 +103,27 @@ class Mem0Agent(BaseAgent):
             self._embedding_dims_cache[model_name_or_path] = dims
             return dims
         except Exception as e:
-            print(f"[Mem0] Warning: Failed to get embedding dims for {model_name_or_path}: {e}")
-            # Default fallback
-            return 512
+            print(f"[Mem0] Warning: Failed to auto-detect embedding dims for {model_name_or_path}: {e}")
+
+        # 4. Fallback to known model dimensions
+        known_dims = {
+            "bge-small": 384,
+            "bge-base": 768,
+            "bge-large": 1024,
+            "bge-m3": 1024,
+            "all-MiniLM-L6": 384,
+            "all-mpnet-base": 768,
+            "paraphrase-multilingual": 768,
+            "multi-qa-MiniLM": 384,
+        }
+        model_lower = model_name_or_path.lower()
+        for pattern, dims in known_dims.items():
+            if pattern.lower() in model_lower:
+                self._embedding_dims_cache[model_name_or_path] = dims
+                return dims
+
+        print(f"[Mem0] Warning: Cannot determine embedding dims for {model_name_or_path}, defaulting to 384")
+        return 384
 
     def _truncate_to_tokens(self, text: str, max_tokens: int) -> str:
         if not text or max_tokens <= 0:
@@ -181,7 +184,11 @@ class Mem0Agent(BaseAgent):
         if self.embedding_provider in ("local", "huggingface"):
             model_name_or_path = self.embedding_model_path or self.embedding_model
 
-            embedding_dims = self._get_embedding_dims(model_name_or_path)
+            # Use configured dim, or auto-detect
+            if self.embedding_dim:
+                embedding_dims = self.embedding_dim
+            else:
+                embedding_dims = self._get_embedding_dims(model_name_or_path)
             print(f"[Mem0] Using local Embedding model: {model_name_or_path} (dims: {embedding_dims})")
 
             mem0_config["embedder"] = {
@@ -202,11 +209,18 @@ class Mem0Agent(BaseAgent):
                 }
             }
         else:
-            embedding_dims = 2048 if "embedding-3" in self.embedding_model else 1536
+            # Use configured dim, or infer from model name
+            if self.embedding_dim:
+                embedding_dims = self.embedding_dim
+            elif "embedding-3-large" in self.embedding_model:
+                embedding_dims = 3072
+            else:
+                embedding_dims = 1536
             mem0_config["embedder"] = {
                 "provider": "openai",
                 "config": {
                     "model": self.embedding_model,
+                    "embedding_dims": embedding_dims,
                     "api_key": self._api_key,
                     "openai_base_url": self._base_url,
                 }
@@ -296,11 +310,7 @@ class Mem0Agent(BaseAgent):
         memory_entries = []
 
         for chunk in chunks:
-            memory_messages = [
-                {"role": "user", "content": chunk},
-                {"role": "assistant", "content": "I'll make sure to remember this information."}
-            ]
-            result = self._memory.add(memory_messages, user_id=user_id)
+            result = self._memory.add(chunk, user_id=user_id)
             if result and "results" in result:
                 for entry in result.get("results", []):
                     memory_entries.append({
@@ -405,23 +415,20 @@ class Mem0Agent(BaseAgent):
             }
         )
 
-    def reset(self) -> None:
-        """Reset agent and release all resources."""
+    def _cleanup_mem0(self) -> None:
+        """Release Mem0 resources (Memory instance, Qdrant storage)."""
         import gc
         import shutil
         import logging
 
         logger = logging.getLogger(__name__)
-        super().reset()
 
-        # Close Mem0 Memory using its close() method
         if self._memory:
             try:
                 if hasattr(self._memory, 'close'):
                     self._memory.close()
                     logger.info("[Mem0Agent] Closed Memory instance")
                 else:
-                    # Fallback: manually close resources
                     if hasattr(self._memory, "llm") and self._memory.llm:
                         if hasattr(self._memory.llm, "close"):
                             self._memory.llm.close()
@@ -430,8 +437,29 @@ class Mem0Agent(BaseAgent):
                             self._memory.vector_store.client.close()
             except Exception as e:
                 logger.warning(f"[Mem0Agent] Warning: Failed to close Memory: {e}")
-
             self._memory = None
+
+        if self._qdrant_path:
+            try:
+                import os
+                if os.path.exists(self._qdrant_path):
+                    shutil.rmtree(self._qdrant_path)
+                    logger.info(f"[Mem0Agent] Cleaned up Qdrant path: {self._qdrant_path}")
+            except Exception as e:
+                logger.warning(f"[Mem0Agent] Warning: Failed to clean up Qdrant path: {e}")
+            self._qdrant_path = None
+
+        gc.collect()
+
+    def reset(self) -> None:
+        """Reset agent and release all resources."""
+        import logging
+
+        logger = logging.getLogger(__name__)
+        super().reset()
+
+        # Clean up Mem0 resources
+        self._cleanup_mem0()
 
         # Close the Q&A LLM client
         if self._llm_client:
@@ -445,28 +473,19 @@ class Mem0Agent(BaseAgent):
                 logger.warning(f"[Mem0Agent] Warning: Failed to close Q&A LLM client: {e}")
             self._llm_client = None
 
-        # Clean up Qdrant directory to release file locks
-        if self._qdrant_path:
-            try:
-                import os
-                if os.path.exists(self._qdrant_path):
-                    shutil.rmtree(self._qdrant_path)
-                    logger.info(f"[Mem0Agent] Cleaned up Qdrant path: {self._qdrant_path}")
-            except Exception as e:
-                logger.warning(f"[Mem0Agent] Warning: Failed to clean up Qdrant path: {e}")
-            self._qdrant_path = None
-
-        # Force garbage collection to release resources immediately
-        gc.collect()
-
         self._agent_start_time = time.time()
 
     def set_context_id(self, context_id: int) -> None:
-        """Set context ID."""
+        """Set context ID and reinitialize Mem0 storage for isolation."""
+        old_context_id = self._context_id
         super().set_context_id(context_id)
-        # Update user_id
         self._user_id = f"context_{context_id}"
         self._agent_start_time = time.time()
+
+        # Reinitialize Mem0 if context changed, to ensure storage isolation
+        if old_context_id != context_id:
+            self._cleanup_mem0()
+            self._init_mem0()
 
     @property
     def memory_count(self) -> int:

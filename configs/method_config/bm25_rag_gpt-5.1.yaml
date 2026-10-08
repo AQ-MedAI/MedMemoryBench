@@ -8,7 +8,7 @@ model:
   provider: "openai"
   name: "gpt-5.1"
   temperature: 0.3
-  max_completion_tokens: 10000
+  max_completion_tokens: 40960
 
 agent_params:
   top_k: 5
@@ -17,4 +17,4 @@ agent_params:
   language: "auto"  # auto / zh / en
   chunk_size: 512
   chunk_overlap: 50
-  max_context_tokens: 100000
+  max_context_tokens: 64000

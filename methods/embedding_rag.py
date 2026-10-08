@@ -210,9 +210,15 @@ class EmbeddingRAGAgent(BaseAgent):
     def memorize(self, text: str, **kwargs) -> MemoryBuildResult:
         """Add text to memory and build vector store."""
         self._memory_chunks.append(text)
-        self._chunks.extend(self._split_text_into_chunks(text))
+        new_chunks = self._split_text_into_chunks(text)
+        self._chunks.extend(new_chunks)
         self._is_initialized = True
         self._build_vectorstore()
+
+        passages = [
+            {"index": len(self._chunks) - len(new_chunks) + i, "content": chunk[:200], "tokens_est": len(chunk) // 4}
+            for i, chunk in enumerate(new_chunks)
+        ]
 
         return MemoryBuildResult(
             success=True,
@@ -220,8 +226,10 @@ class EmbeddingRAGAgent(BaseAgent):
             action="build_vectorstore",
             input_content=text,
             stored_content=text,
+            all_passages=passages,
+            memory_entries=[{"type": "vector_chunk", "count": len(new_chunks)}],
             chunk_count=len(self._chunks),
-            extra={"original_doc_count": len(self._memory_chunks)},
+            extra={"original_doc_count": len(self._memory_chunks), "new_chunks": len(new_chunks)},
         )
 
     def _retrieve(self, query: str) -> List[str]:

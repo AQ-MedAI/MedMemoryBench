@@ -317,16 +317,21 @@ class MedMemoryBenchEvaluator:
                 # Show progress
                 self._log(f"      [Progress] Session {idx + 1}/{total_sessions} (ID: {session.session_id})")
 
-                formatted_text = self.prompt_manager.format_memorize(
-                    context=memory_text,
-                    timestamp=None,
-                )
+                # Only agentic methods need instruction prompt for memorization;
+                # RAG/long_context methods store raw text directly into their stores
+                if self.prompt_manager.method_type == "agentic":
+                    memorize_text = self.prompt_manager.format_memorize(
+                        context=memory_text,
+                        timestamp=None,
+                    )
+                else:
+                    memorize_text = memory_text
 
                 is_last_session = (idx == total_sessions - 1)
 
                 try:
                     memory_result = self.agent_manager.send_message(
-                        message=formatted_text,
+                        message=memorize_text,
                         memorizing=True,
                         context_id=unit.context_id,
                         is_last_session=is_last_session,
@@ -402,6 +407,12 @@ class MedMemoryBenchEvaluator:
             results.append(result)
             total_query_time += result.query_time
 
+            # agent_manager is None during dry-run (no agent is constructed)
+            if getattr(self.agent_manager, "method_name", "") and "memrl" in self.agent_manager.method_name:
+                self.agent_manager.send_query_feedback(
+                    score=result.score, is_correct=result.is_correct
+                )
+
             status = "✓" if result.is_correct else "✗"
             self._log(f"    [{status}] {query.query_id} ({query.query_type}): {result.score:.2f}")
 
@@ -471,17 +482,22 @@ class MedMemoryBenchEvaluator:
             query_time = response.get("query_time", 0.0)
             retrieved_memories = response.get("retrieved_memories", [])
             retrieved_count = response.get("retrieved_count", 0)
+            extra = response.get("extra", {})
         elif hasattr(response, "output"):
             model_output = response.output
             query_time = getattr(response, "query_time", 0.0)
             retrieved_memories = getattr(response, "retrieved_memories", [])
             retrieved_count = getattr(response, "retrieved_count", 0)
+            extra = getattr(response, "extra", {})
         else:
             model_output = str(response)
             query_time = 0.0
             retrieved_memories = []
             retrieved_count = 0
+            extra = {}
 
+        saved_phase = get_usage_tracker()._current_phase
+        get_usage_tracker().set_phase("evaluation")
         result = self.metrics_calculator.compute(
             query_id=query.query_id,
             query_type=query.query_type,
@@ -491,10 +507,12 @@ class MedMemoryBenchEvaluator:
             answers_data=answers_data,
             metadata=query.metadata,
         )
+        get_usage_tracker().set_phase(saved_phase)
 
         result.query_time = query_time
         result.retrieved_memories = retrieved_memories
         result.retrieved_count = retrieved_count
+        result.extra = extra
 
         return result
 
