@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-｜🤗 <a href="https://huggingface.co/datasets/AQ-MedAI/MedMemoryBench" target="_blank">HuggingFace Dataset</a> ｜
+｜🤗 <a href="https://huggingface.co/datasets/Cyan27/MedMemoryBench" target="_blank">HuggingFace Dataset</a> ｜
 📄 <a href="https://arxiv.org/abs/2605.11814">Arxiv Preprint</a> ｜
 🌐 <a href="README.md">English</a> ｜
 </p>
@@ -42,7 +42,7 @@
 
 - **[2026.09]** 🎉 MedMemoryBench 已被 **NeurIPS 2026** 接收！
 - **[2026.05]** MedMemoryBench v1.0 正式发布 — 包含数据集、评测框架与 14 种记忆方法基线。
-- **[2026.05]** 数据集已上线 [HuggingFace](https://huggingface.co/datasets/AQ-MedAI/MedMemoryBench)。
+- **[2026.05]** 数据集已上线 [HuggingFace](https://huggingface.co/datasets/Cyan27/MedMemoryBench)。
 
 ## ✨ 特性亮点
 
@@ -105,8 +105,8 @@
 
 | 数据集 | 来源 | 期望本地路径 | 配置文件 | 体积 |
 |:------|:-----|:-------------|:---------|:-----|
-| **MedMemoryBench**（中文） | 🤗 [AQ-MedAI/MedMemoryBench](https://huggingface.co/datasets/AQ-MedAI/MedMemoryBench) | `data/MedMemoryBench/` | `medmemorybench.yaml` | ~598 MB |
-| **MedMemoryBench**（英文） | 🤗 [AQ-MedAI/MedMemoryBench](https://huggingface.co/datasets/AQ-MedAI/MedMemoryBench) | `data/MedMemoryBench_EN/` | `medmemorybench.yaml`（改 `root_dir`） | ~443 MB |
+| **MedMemoryBench**（中文） | 🤗 [AQ-MedAI/MedMemoryBench](https://huggingface.co/datasets/Cyan27/MedMemoryBench) | `data/MedMemoryBench/` | `medmemorybench.yaml` | ~598 MB |
+| **MedMemoryBench**（英文） | 🤗 [AQ-MedAI/MedMemoryBench](https://huggingface.co/datasets/Cyan27/MedMemoryBench) | `data/MedMemoryBench_EN/` | `medmemorybench.yaml`（改 `root_dir`） | ~443 MB |
 | **LoCoMo** | 🐙 [snap-research/locomo](https://github.com/snap-research/locomo) | `data/locomo/` | `locomo.yaml` | ~18 MB |
 | **AMA-Bench** | 🐙 [AMA-Bench/AMA-Hub](https://github.com/AMA-Bench/AMA-Hub) | `data/AMA-Hub/` | `ama_bench.yaml` | ~48 MB |
 | LongMemEval-V2（可选） | 🐙 [LongMemEval-V2](https://github.com/xiaowu0162/LongMemEval-V2) | `data/longmemeval-v2/` | `longmemeval_v2.yaml` | — |

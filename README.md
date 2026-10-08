@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-｜🤗 <a href="https://huggingface.co/datasets/AQ-MedAI/MedMemoryBench" target="_blank">HuggingFace Dataset</a> ｜
+｜🤗 <a href="https://huggingface.co/datasets/Cyan27/MedMemoryBench" target="_blank">HuggingFace Dataset</a> ｜
 📄 <a href="https://arxiv.org/abs/2605.11814">Arxiv Preprint</a> ｜
 🌐 <a href="README_ZH.md">中文</a> ｜
 </p>
@@ -42,7 +42,7 @@
 
 - **[2026.09]** 🎉 MedMemoryBench is accepted to **NeurIPS 2026**!
 - **[2026.05]** MedMemoryBench v1.0 is officially released — dataset, evaluation framework, and 14 memory method baselines.
-- **[2026.05]** Dataset available on [HuggingFace](https://huggingface.co/datasets/AQ-MedAI/MedMemoryBench).
+- **[2026.05]** Dataset available on [HuggingFace](https://huggingface.co/datasets/Cyan27/MedMemoryBench).
 
 ## ✨ Features
 
@@ -105,8 +105,8 @@ Every dataset is loaded from a fixed path under `data/`, declared by the `data.r
 
 | Dataset | Source | Expected local path | Config file | Size |
 |:--------|:-------|:--------------------|:------------|:-----|
-| **MedMemoryBench** (zh) | 🤗 [AQ-MedAI/MedMemoryBench](https://huggingface.co/datasets/AQ-MedAI/MedMemoryBench) | `data/MedMemoryBench/` | `medmemorybench.yaml` | ~598 MB |
-| **MedMemoryBench** (en) | 🤗 [AQ-MedAI/MedMemoryBench](https://huggingface.co/datasets/AQ-MedAI/MedMemoryBench) | `data/MedMemoryBench_EN/` | `medmemorybench.yaml` (`root_dir`) | ~443 MB |
+| **MedMemoryBench** (zh) | 🤗 [AQ-MedAI/MedMemoryBench](https://huggingface.co/datasets/Cyan27/MedMemoryBench) | `data/MedMemoryBench/` | `medmemorybench.yaml` | ~598 MB |
+| **MedMemoryBench** (en) | 🤗 [AQ-MedAI/MedMemoryBench](https://huggingface.co/datasets/Cyan27/MedMemoryBench) | `data/MedMemoryBench_EN/` | `medmemorybench.yaml` (`root_dir`) | ~443 MB |
 | **LoCoMo** | 🐙 [snap-research/locomo](https://github.com/snap-research/locomo) | `data/locomo/` | `locomo.yaml` | ~18 MB |
 | **AMA-Bench** | 🐙 [AMA-Bench/AMA-Hub](https://github.com/AMA-Bench/AMA-Hub) | `data/AMA-Hub/` | `ama_bench.yaml` | ~48 MB |
 | LongMemEval-V2 (optional) | 🐙 [LongMemEval-V2](https://github.com/xiaowu0162/LongMemEval-V2) | `data/longmemeval-v2/` | `longmemeval_v2.yaml` | — |
